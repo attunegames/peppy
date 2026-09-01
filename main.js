@@ -75,6 +75,10 @@ ipcMain.handle("slippi-info", async () => {
 ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character }) => {
   const d = await orchestrator();
   try {
+    // Close any Dolphin still running FIRST: on Windows a live process holds
+    // its config and log files open, and writing them then fails with EBUSY.
+    d.killAll();
+    await new Promise((r) => setTimeout(r, 400));
     const { isoPath } = d.ensureSandbox();
     d.writeMatchConfigs({ opponentCode, stageId, character });
     const pid = d.launch({ isoPath });

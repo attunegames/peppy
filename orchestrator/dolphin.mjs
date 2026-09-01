@@ -68,7 +68,11 @@ export function ensureSandbox() {
       execFileSync("robocopy", [netplay, SANDBOX, "/E", "/XD", "Cache", "Dump",
         "ScreenShots", "Logs", "/NFL", "/NDL", "/NJH", "/NJS"], { stdio: "ignore" });
     } catch (err) {
-      if (err.status === undefined || err.status > 7) throw err; // 0-7 = success
+      // robocopy returns 0-7 for success. A real failure usually means files
+      // are locked by a running Dolphin - if we already have a usable copy,
+      // play with that rather than refusing to start.
+      const usable = fs.existsSync(dstExe);
+      if (!usable && (err.status === undefined || err.status > 7)) throw err;
     }
   }
   return { sandbox: SANDBOX, isoPath };
@@ -144,15 +148,25 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD, 
   }
   // Mirror the player's real Dolphin settings (their controller, video, delay).
   const realIni = path.join(SLIPPI_DIR, "netplay", "User", "Config", "Dolphin.ini");
-  fs.copyFileSync(realIni, path.join(user, "Config", "Dolphin.ini"));
+  try {
+    fs.copyFileSync(realIni, path.join(user, "Config", "Dolphin.ini"));
+  } catch { /* keep the copy we already have rather than refusing to play */ }
   // No GCPadNew: native adapter only. Peppy never uses virtual controllers.
-  const gcpad = path.join(user, "Config", "GCPadNew.ini");
-  if (fs.existsSync(gcpad)) fs.rmSync(gcpad);
+  try {
+    const gcpad = path.join(user, "Config", "GCPadNew.ini");
+    if (fs.existsSync(gcpad)) fs.rmSync(gcpad);
+  } catch { /* not fatal */ }
   // Slippi logging on: the connect moment is our cue to reveal the window.
   fs.writeFileSync(path.join(user, "Config", "Logger.ini"),
     "[Options]\nWriteToFile = True\nVerbosity = 5\n[Logs]\nSLIPPI = True\nSLIPPI_ONLINE = True\n");
-  const log = path.join(SANDBOX, LOG_REL);
-  if (fs.existsSync(log)) fs.rmSync(log);
+  // Best effort only. A still-running Dolphin holds this file open, and on
+  // Windows the delete then fails with EBUSY - which used to abort the whole
+  // launch with "Couldn't start the game". Detection reads from the end of the
+  // file instead (see logOffset below), so clearing it is a nicety, not a need.
+  try {
+    const log = path.join(SANDBOX, LOG_REL);
+    if (fs.existsSync(log)) fs.rmSync(log);
+  } catch { /* keep going: the log is only used to spot the connection */ }
 
   fs.writeFileSync(path.join(user, "GameSettings", "GALE01r2.ini"),
     buildGeckoIni({ stageId, character }));
@@ -213,6 +227,10 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
   const log = path.join(SANDBOX, LOG_REL);
   const started = Date.now();
   let revealed = false;
+  // Where the log already ended, so a "Connection success!" from an earlier
+  // match can never be mistaken for this one.
+  let baseline = 0;
+  try { baseline = fs.existsSync(log) ? fs.statSync(log).size : 0; } catch { baseline = 0; }
 
   const reveal = (why) => {
     if (revealed) return;
@@ -238,7 +256,18 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
 
     if (fs.existsSync(log)) {
       let text = "";
-      try { text = fs.readFileSync(log, "latin1"); } catch { /* mid-write */ }
+      try {
+        const size = fs.statSync(log).size;
+        if (size < baseline) baseline = 0;          // log was rotated/cleared
+        if (size > baseline) {
+          const fd = fs.openSync(log, "r");
+          try {
+            const buf = Buffer.alloc(size - baseline);
+            fs.readSync(fd, buf, 0, buf.length, baseline);
+            text = buf.toString("latin1");
+          } finally { fs.closeSync(fd); }
+        }
+      } catch { /* mid-write; try again next tick */ }
       if (text.includes("Connection success!")) return reveal("connected");
     }
     if (Date.now() - started > revealAfterMs) reveal("timeout");
