@@ -1,0 +1,53 @@
+PEPPY - one-click Slippi friendlies (early test build)
+=====================================================
+
+WHAT IT IS
+Peppy sets up Slippi direct matches for you. No typing connect codes in-game,
+no scrolling menus: the game opens straight into your match, already connected,
+with your character and stage picked. You just play.
+
+WHAT YOU NEED FIRST
+  1. Slippi Launcher installed, logged in, with your Melee ISO configured.
+  2. Press PLAY in the Slippi Launcher once, so Slippi downloads its game files.
+  3. Your GameCube controller / adapter set up the way you normally play.
+
+HOW TO RUN IT
+  Unzip anywhere, then run Peppy.exe.
+
+  Windows will probably warn you ("Windows protected your PC") because this
+  build is not code-signed - it's a hobby app, not a commercial release.
+  Click "More info" then "Run anyway". You can verify what it does: the whole
+  thing is plain readable JavaScript inside the resources folder.
+
+  You may also get a Windows Firewall prompt for "Slippi Dolphin". Allow it -
+  that's Melee's netplay, same as normal Slippi.
+
+HOW TO PLAY SOMEONE
+  1. Type YOUR connect code in the top-right box (e.g. BIRD#704).
+  2. Pick your character and your game-1 stage.
+  3. Type your friend's code under PLAY SOMEONE and hit CHALLENGE.
+  4. Your friend does the same, with YOUR code.
+  5. Both hit "I'M READY".
+  Melee opens hidden, connects, and appears once you're actually in the match.
+
+WHAT IS AND ISN'T FINISHED
+  Working : direct matches, automatic character + game-1 stage selection,
+            hidden setup, recently-played list, add-a-friend list (local).
+  Not yet : the shared Fort Wayne queue (needs the Peppy server), Discord
+            notifications, tournaments, best-of-3/5 sets.
+
+WHAT IT DOES TO YOUR PC
+  * Copies your Slippi Dolphin into %APPDATA%\Peppy (your real Slippi install
+    is never modified).
+  * Writes match settings + game patches into that copy only.
+  * Never asks for, reads, or sends your slippi.gg password. Your Slippi login
+    file is used only where Dolphin already expects it, on your own machine.
+  * No account, no telemetry, nothing leaves your computer in this build.
+
+TO UNINSTALL
+  Delete the folder you unzipped, and delete %APPDATA%\Peppy.
+
+IF SOMETHING BREAKS
+  The status bar at the bottom of the window says what's wrong (usually Slippi
+  or the ISO not being found). Tell whoever sent you this build - early test
+  feedback is the whole point.

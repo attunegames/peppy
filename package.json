@@ -1,0 +1,25 @@
+{
+  "name": "peppy",
+  "productName": "Peppy",
+  "version": "0.1.0",
+  "description": "One-click Slippi friendlies for your local scene. Named after the hare.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-packager . Peppy --platform=win32 --arch=x64 --out=dist --overwrite --app-copyright=\"Attune Games\" --ignore=\"^/dist\" --ignore=\"^/backend\"",
+    "smoke": "node smoke-test.mjs"
+  },
+  "author": "Attune Games",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/peppy"
+  }
+}

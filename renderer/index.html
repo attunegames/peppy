@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Peppy</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header id="topbar">
+  <div id="logo">PEPPY</div>
+  <div id="me">
+    <input id="myCode" placeholder="YOUR CODE" maxlength="8" spellcheck="false" title="your Slippi connect code" />
+  </div>
+</header>
+
+<main>
+  <!-- Your setup: character + stage -->
+  <section class="card">
+    <h2>YOUR SETUP</h2>
+    <div class="row">
+      <label>Character
+        <select id="charSel"></select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Game 1 stage
+        <select id="stageSel">
+          <option value="31">Battlefield</option>
+          <option value="32">Final Destination</option>
+          <option value="28">Dream Land</option>
+          <option value="2">Fountain of Dreams</option>
+          <option value="8">Yoshi's Story</option>
+          <option value="3">Pokémon Stadium</option>
+        </select>
+      </label>
+    </div>
+    <div class="hint">Peppy picks these for you in-game — you just play.</div>
+  </section>
+
+  <!-- Direct match -->
+  <section class="card">
+    <h2>PLAY SOMEONE</h2>
+    <div class="row">
+      <input id="directCode" placeholder="THEIR CODE (ABCD#123)" maxlength="8" spellcheck="false" />
+      <button id="directBtn">CHALLENGE</button>
+    </div>
+    <div class="hint">Both of you challenge each other's code, then hit READY.</div>
+  </section>
+
+  <!-- Fort Wayne Queue -->
+  <section class="card" id="queueCard">
+    <h2>FORT WAYNE QUEUE</h2>
+    <div id="queueStatus">Nobody is waiting right now.</div>
+    <div id="queueLists" class="hidden">
+      <h3>IN QUEUE</h3>
+      <ul id="queueList" class="plist"></ul>
+      <h3>SPECTATING</h3>
+      <ul id="spectateList" class="plist"></ul>
+    </div>
+    <button id="joinQueueBtn" class="big">JOIN QUEUE</button>
+    <button id="spectateBtn" class="big alt hidden">GO SPECTATE</button>
+    <div class="hint" id="queueHint">Offline preview — the shared queue needs the Peppy server (not set up yet).</div>
+  </section>
+
+  <!-- Friends -->
+  <section class="card">
+    <h2>FRIENDS</h2>
+    <ul id="friendsList" class="plist"></ul>
+  </section>
+
+  <!-- Recently played -->
+  <section class="card">
+    <h2>RECENTLY PLAYED</h2>
+    <ul id="recentList" class="plist"></ul>
+  </section>
+</main>
+
+<!-- Challenge / connecting overlay -->
+<div id="overlay" class="hidden">
+  <div id="overlayBox">
+    <div class="spinner" id="overlaySpinner"></div>
+    <div id="overlayText">Connecting…</div>
+    <div id="overlayButtons">
+      <button id="readyBtn" class="hidden">I'M READY</button>
+      <button id="cancelBtn" class="leave">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<footer id="statusbar">starting…</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
