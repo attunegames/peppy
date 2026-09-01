@@ -74,6 +74,35 @@ export function ensureSandbox() {
   return { sandbox: SANDBOX, isoPath };
 }
 
+/**
+ * Who is this PC logged into Slippi as?
+ *
+ * Reads ONLY the two public identity fields from Slippi's user.json - the
+ * connect code and the display name. The play key that also lives in that file
+ * is never read, stored or transmitted, and Peppy never asks for a slippi.gg
+ * password.
+ *
+ * This is what lets one player use Peppy on several machines: being able to
+ * play as a code in Slippi is what makes you that player in Peppy.
+ */
+export function readSlippiIdentity() {
+  const file = path.join(SLIPPI_DIR, "netplay", "User", "Slippi", "user.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+    const code = String(raw.connectCode ?? "").trim();
+    if (!code) return null;
+    // user.json stores it full-width; the app works in plain ASCII
+    const ascii = [...code].map((ch) => {
+      const c = ch.charCodeAt(0);
+      return c >= 0xff01 && c <= 0xff5e ? String.fromCharCode(c - 0xfee0) : ch;
+    }).join("").toUpperCase();
+    if (!/^[A-Z]{1,7}#\d{1,3}$/.test(ascii)) return null;
+    return { connectCode: ascii, displayName: String(raw.displayName ?? "").trim() || ascii.split("#")[0] };
+  } catch {
+    return null;   // not logged in, or Slippi not installed
+  }
+}
+
 // "TEST#001" -> full-width, the charset the in-game code list uses.
 export function toFullWidth(code) {
   return [...code.toUpperCase()]

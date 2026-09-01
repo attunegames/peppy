@@ -352,12 +352,23 @@ Ready when you are.`,
 // ---- boot ----
 (async () => {
   const fallback = ["FOX", "FALCO", "MARTH", "SHEIK", "JIGGLYPUFF", "PEACH", "CPTFALCON"];
-  let chars = fallback, status = "browser preview - mock mode";
+  let chars = fallback, status = "browser preview - mock mode", detected = null;
   if (bridge) {
     const info = await bridge.slippiInfo();
     chars = info.characters?.length ? info.characters : fallback;
     status = info.ok ? "ready - Slippi and Melee found" : "SETUP NEEDED: " + info.error;
     $("statusbar").classList.toggle("bad", !info.ok);
+    // Your identity comes from this PC's Slippi login, so the same code works
+    // on every machine you play on and nobody has to type anything.
+    detected = info.identity ?? null;
+    if (detected) {
+      backend.me.code = detected.connectCode;
+      backend.me.name = detected.displayName;
+      store.set("myCode", detected.connectCode);
+      $("myCode").value = detected.connectCode;
+      $("myCode").title = "from your Slippi login on this PC";
+      $("myCode").readOnly = true;
+    }
   }
   const sel = $("charSel");
   sel.innerHTML = "";
@@ -402,8 +413,14 @@ Ready when you are.`,
     await refreshFromServer();
     return true;
   };
-  if (backend.me.code) await claim(backend.me.code);
-  else $("queueHint").textContent = "Enter your connect code above to join the queue.";
+  if (backend.me.code) {
+    const okClaim = await claim(backend.me.code);
+    if (okClaim && detected) {
+      $("queueHint").textContent = `Signed in as ${detected.displayName} (${detected.connectCode}) from Slippi.`;
+    }
+  } else {
+    $("queueHint").textContent = "Log in to Slippi (or type your code above) to join the queue.";
+  }
 
   $("myCode").addEventListener("change", async (e) => {
     await claim(e.target.value.toUpperCase().trim());

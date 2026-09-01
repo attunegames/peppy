@@ -36,13 +36,21 @@ WHAT IS AND ISN'T FINISHED
   Not yet : the shared Fort Wayne queue (needs the Peppy server), Discord
             notifications, tournaments, best-of-3/5 sets.
 
+WHO PEPPY THINKS YOU ARE
+  Peppy reads your connect code and display name out of the Slippi login file
+  already on your PC, so there is nothing to sign up for and nothing to type -
+  and the same code works on every machine you play Slippi on.
+
+  It reads ONLY those two fields, both of which are public. The play key stored
+  in that same file is never read, never stored, and never sent anywhere, and
+  Peppy never asks for your slippi.gg password.
+
 WHAT IT DOES TO YOUR PC
   * Copies your Slippi Dolphin into %APPDATA%\Peppy (your real Slippi install
     is never modified).
   * Writes match settings + game patches into that copy only.
-  * Never asks for, reads, or sends your slippi.gg password. Your Slippi login
-    file is used only where Dolphin already expects it, on your own machine.
-  * No account, no telemetry, nothing leaves your computer in this build.
+  * Sends only your connect code, display name, and whether you are at your
+    computer to the Peppy queue - that is what lets people challenge you.
 
 TO UNINSTALL
   Delete the folder you unzipped, and delete %APPDATA%\Peppy.

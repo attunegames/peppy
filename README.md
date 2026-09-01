@@ -115,9 +115,22 @@ synthesize input on the character-select screen, never during gameplay, and
 Peppy never touches ranked or unranked matchmaking - bots on public matchmaking
 are against Slippi's rules and Peppy has no business there.
 
-## Privacy
+## Identity and privacy
 
-No account, no telemetry, no network calls of its own in this build. Peppy
-never asks for, reads, or transmits your slippi.gg credentials; your Slippi
-login file is only used where Dolphin already expects to find it, on your own
-machine.
+Your identity comes from your Slippi login, not from an account you make here.
+Peppy reads two fields out of the Slippi `user.json` already on the machine -
+`connectCode` and `displayName`, both public - and treats you as that player.
+That is deliberate: every PC where Slippi works is automatically yours, so a
+laptop and a desktop are the same person with nothing to type or link.
+
+The `playKey` stored in that same file is never read, never stored and never
+transmitted, and Peppy never asks for a slippi.gg password.
+
+Being a local check, the server takes the client's word for it. Someone could
+edit that file to appear as you in the queue - but not to play as you, since
+connecting for real needs Slippi credentials they do not have. That trade is
+deliberate for a local scene; a link-code or Discord login would close it if
+this ever outgrows one city.
+
+Beyond that: no telemetry. The queue stores your connect code, display name,
+preferences, who you played and whether you are currently at your computer.

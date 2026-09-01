@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createClient } from "@supabase/supabase-js";
+import { testDevice, signIn, rpc } from "./test-device.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CFG = JSON.parse(fs.readFileSync(path.join(ROOT, "resources", "config.json"), "utf-8"));
@@ -18,40 +18,47 @@ const ok = (label, cond, extra = "") => {
   cond ? pass++ : fail++;
 };
 
-function device() {
-  const mem = {};
-  return createClient(CFG.supabaseUrl, CFG.supabaseKey, {
-    auth: {
-      storage: { getItem: (k) => mem[k] ?? null, setItem: (k, v) => { mem[k] = v; }, removeItem: (k) => { delete mem[k]; } },
-      persistSession: true, autoRefreshToken: false, detectSessionInUrl: false,
-    },
-  });
-}
-const rpc = async (c, name, args = {}) => {
-  const { data, error } = await c.rpc(name, args);
-  if (error) throw new Error(`${name}: ${error.message}`);
-  return data;
-};
 let myCodes = [];   // set once this run's codes exist
 const queue = async (c) => (await rpc(c, "peppy_queue_list"))
   .filter((r) => myCodes.includes(r.connect_code));
 const pairingOf = async (c) => (await rpc(c, "peppy_my_pairing"))?.[0] ?? null;
 const stateOf = (q, code) => q.find((r) => r.connect_code === code)?.state;
 
+
+// Tests share the one real Fort Wayne queue, so a run that dies half way used
+// to leave players sitting in it and the next run would pair against those
+// ghosts. Wait for a clear room, and always clean up (see the finally below).
+async function waitForEmptyQueue(c, rpc, timeoutMs = 240000) {
+  const started = Date.now();
+  for (;;) {
+    const q = await rpc(c, "peppy_queue_list");
+    if (!q.length) return true;
+    if (Date.now() - started > timeoutMs) {
+      console.log(`(giving up waiting; ${q.length} player(s) still in the queue)`);
+      return false;
+    }
+    process.stdout.write(`
+waiting for the queue to clear (${q.length} left, offline players drop after 3 min)...   `);
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+
 const main = async () => {
-  const A = device(), B = device(), C = device();
+  const A = testDevice("rotA"), B = testDevice("rotB"), C = testDevice("rotC");
+  devices = [A, B, C];        // so the crash handler can clean up
   // Fresh codes each run: a claimed code belongs to the device that claimed it,
   // and every run signs in as brand new anonymous devices.
-  const n = () => String(Math.floor(Math.random() * 900) + 99);
-  const codes = { A: `RTA#${n()}`, B: `RTB#${n()}`, C: `RTC#${n()}` };
+  // Stable devices own stable codes (re-claiming your own code is allowed).
+  const codes = { A: "RTA#001", B: "RTB#002", C: "RTC#003" };
   myCodes = Object.values(codes);
   console.log("test codes:", myCodes.join("  "));
 
   for (const [k, c] of Object.entries({ A, B, C })) {
-    await c.auth.signInAnonymously();
+    await signIn(c, "device " + k);
     await rpc(c, "peppy_claim_code", { p_code: codes[k], p_name: "Rot" + k });
     await rpc(c, "peppy_queue_leave");   // clean slate from any earlier run
   }
+  await waitForEmptyQueue(A, rpc);
   console.log("--- two players ---");
 
   await rpc(A, "peppy_queue_set", { p_state: "waiting" });
@@ -127,4 +134,12 @@ const main = async () => {
   process.exit(fail ? 1 : 0);
 };
 
-main().catch((e) => { console.error("ERROR:", e.message); process.exit(1); });
+// Always leave the queue as we found it, even when an assertion throws.
+let devices = [];
+main()
+  .then((fails) => process.exit(fails ? 1 : 0))
+  .catch(async (e) => {
+    console.error("ERROR:", e.message);
+    for (const c of devices) { try { await c.rpc("peppy_queue_leave"); } catch { /* best effort */ } }
+    process.exit(1);
+  });
