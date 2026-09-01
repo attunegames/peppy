@@ -12,6 +12,9 @@ const store = {
   set(k, v) { localStorage.setItem("peppy." + k, JSON.stringify(v)); },
 };
 
+const net = bridge?.net ?? null;
+let serverUp = false;          // set by boot(); false = offline mode
+
 const backend = {
   me: { name: "You", code: store.get("myCode", "") },
   friends: store.get("friends", []),
@@ -22,18 +25,24 @@ const backend = {
   emit(e) { for (const fn of this.listeners) fn(e); },
   on(fn) { this.listeners.add(fn); },
 
-  joinQueue() { this.queue.push(this.me); this.emit({ type: "queue-updated" }); },
-  leaveQueue() {
+  async joinQueue() {
+    if (serverUp) { await net.queue("join"); await refreshFromServer(); return; }
+    this.queue.push(this.me); this.emit({ type: "queue-updated" });
+  },
+  async leaveQueue() {
+    if (serverUp) { await net.queue("leave"); await refreshFromServer(); return; }
     this.queue = this.queue.filter((p) => p.code !== this.me.code);
     this.spectators = this.spectators.filter((p) => p.code !== this.me.code);
     this.emit({ type: "queue-updated" });
   },
-  goSpectate() {
+  async goSpectate() {
+    if (serverUp) { await net.queue("spectate"); await refreshFromServer(); return; }
     this.queue = this.queue.filter((p) => p.code !== this.me.code);
     this.spectators.push(this.me);
     this.emit({ type: "queue-updated" });
   },
-  rejoinPool() {
+  async rejoinPool() {
+    if (serverUp) { await net.queue("join"); await refreshFromServer(); return; }
     this.spectators = this.spectators.filter((p) => p.code !== this.me.code);
     this.queue.push(this.me);
     this.emit({ type: "queue-updated" });
@@ -42,11 +51,20 @@ const backend = {
   // No server yet: a challenge is "ready as soon as you are". Once the shared
   // backend exists, accepting on the other side fires challenge-accepted and
   // that acceptance counts as their ready (decided 2026-08-05).
-  sendChallenge(code) {
+  async sendChallenge(code) {
     this.emit({ type: "challenge-sent", code });
+    if (serverUp) {
+      const res = await net.challenge(code, Number($("stageSel").value));
+      if (!res.ok) { this.emit({ type: "challenge-failed", error: res.error }); return; }
+      return; // the poll loop reports when they accept
+    }
+    // offline: no server to relay through, so ready up as soon as you like
     setTimeout(() => this.emit({ type: "challenge-accepted", code }), 400);
   },
-  cancelChallenge() { this.emit({ type: "challenge-cancelled" }); },
+  async cancelChallenge() {
+    if (serverUp) { try { await net.cancel(null); } catch { /* already gone */ } }
+    this.emit({ type: "challenge-cancelled" });
+  },
   confirmReady(code) { this.emit({ type: "match-launch", code }); },
 };
 
@@ -163,6 +181,10 @@ backend.on(async (event) => {
         bridge?.notifyBlink();
       }
       break;
+    case "challenge-failed":
+      closeOverlay();
+      alert("Couldn't send that challenge:\n\n" + event.error);
+      break;
     case "match-launch":
       if (!challenge) break;
       challenge.phase = "launching";
@@ -198,10 +220,12 @@ bridge?.onMatchState((state) => {
   }
 });
 
-function showOverlay({ text, spinner, ready }) {
+function showOverlay({ text, spinner, ready, accept = false }) {
   $("overlayText").textContent = text;
   $("overlaySpinner").classList.toggle("hidden", !spinner);
   $("readyBtn").classList.toggle("hidden", !ready);
+  $("acceptBtn").classList.toggle("hidden", !accept);
+  $("declineBtn").classList.toggle("hidden", !accept);
   $("overlay").classList.remove("hidden");
 }
 
@@ -241,6 +265,72 @@ $("spectateBtn").addEventListener("click", () => {
   render();
 });
 
+// ---- shared server ----
+
+async function refreshFromServer() {
+  if (!serverUp) return;
+  const [q, f, r] = await Promise.all([net.queueList(), net.friends(), net.recent()]);
+  if (q.ok) {
+    const rows = q.data ?? [];
+    const asPerson = (row) => ({
+      code: row.connect_code, name: row.display_name, online: row.online,
+    });
+    backend.queue = rows.filter((x) => x.state !== "spectating").map(asPerson);
+    backend.spectators = rows.filter((x) => x.state === "spectating").map(asPerson);
+    const mine = rows.find((x) => x.connect_code === backend.me.code);
+    myQueueState = !mine ? "out" : mine.state === "spectating" ? "spectating" : "queued";
+  }
+  if (f.ok) backend.friends = (f.data ?? []).map((x) => ({
+    code: x.connect_code, name: x.display_name, online: x.online }));
+  if (r.ok) backend.recent = (r.data ?? []).map((x) => ({
+    code: x.connect_code, name: x.display_name }));
+  render();
+}
+
+// Someone challenged us. Accepting counts as our ready, so the moment we
+// accept we go straight into setting the match up.
+let incomingId = null;
+net?.onIncoming(async (c) => {
+  if (challenge || incomingId === c.challenge_id) return;
+  incomingId = c.challenge_id;
+  const mins = Math.max(0, Math.round((new Date(c.expires_at) - Date.now()) / 60000));
+  showOverlay({
+    text: `${c.from_name} (${c.from_code}) wants to play!
+Accept within ${mins} min.`,
+    spinner: false, ready: false, accept: true,
+  });
+});
+
+$("acceptBtn").addEventListener("click", async () => {
+  const res = await net.respond(incomingId, true);
+  const code = $("overlayText").textContent.match(/\(([A-Z]+#\d+)\)/)?.[1];
+  incomingId = null;
+  if (!res.ok) { closeOverlay(); alert("Couldn't accept:\n\n" + res.error); return; }
+  challenge = { code, phase: "accepted" };
+  backend.confirmReady(code);          // accepting IS our ready
+});
+
+$("declineBtn").addEventListener("click", async () => {
+  if (incomingId) await net.respond(incomingId, false);
+  incomingId = null;
+  closeOverlay();
+});
+
+// Our outgoing challenge was answered.
+net?.onOutgoing((c) => {
+  if (!challenge || challenge.phase !== "sent") return;
+  if (c.state === "accepted") {
+    challenge.phase = "accepted";
+    showOverlay({ text: `${challenge.code} accepted!
+Ready when you are.`,
+      spinner: false, ready: true });
+    bridge?.notifyBlink();
+  } else {
+    closeOverlay();
+    alert(`${challenge.code} ${c.state} the challenge.`);
+  }
+});
+
 // ---- boot ----
 (async () => {
   const fallback = ["FOX", "FALCO", "MARTH", "SHEIK", "JIGGLYPUFF", "PEACH", "CPTFALCON"];
@@ -260,9 +350,47 @@ $("spectateBtn").addEventListener("click", () => {
     sel.appendChild(o);
   }
   sel.value = store.get("character", "FOX");
-  sel.addEventListener("change", () => store.set("character", sel.value));
+  sel.addEventListener("change", () => {
+    store.set("character", sel.value);
+    if (serverUp) net.heartbeat(sel.value, Number($("stageSel").value));
+  });
   $("stageSel").value = store.get("stage", "31");
-  $("stageSel").addEventListener("change", () => store.set("stage", $("stageSel").value));
+  $("stageSel").addEventListener("change", () => {
+    store.set("stage", $("stageSel").value);
+    if (serverUp) net.heartbeat(sel.value, Number($("stageSel").value));
+  });
   $("statusbar").textContent = status;
   render();
+
+  // ---- connect to the shared server (optional) ----
+  if (!net) return;
+  const conn = await net.connect();
+  serverUp = !!conn.ok;
+  if (!serverUp) {
+    $("queueHint").textContent = "Can't reach the Peppy server - direct challenges still work.";
+    $("statusbar").textContent = status + " | server offline";
+    return;
+  }
+  // Claim our connect code so other people can find us.
+  const claim = async (code) => {
+    if (!/^[A-Z]{1,7}#\d{1,3}$/.test(code)) return false;
+    const res = await net.claim(code, code.split("#")[0]);
+    if (!res.ok) {
+      $("queueHint").textContent = res.error;
+      return false;
+    }
+    backend.me.code = code;
+    $("queueHint").textContent = "Connected to the Fort Wayne queue.";
+    await refreshFromServer();
+    return true;
+  };
+  if (backend.me.code) await claim(backend.me.code);
+  else $("queueHint").textContent = "Enter your connect code above to join the queue.";
+
+  $("myCode").addEventListener("change", async (e) => {
+    await claim(e.target.value.toUpperCase().trim());
+  });
+
+  $("statusbar").textContent = status + " | connected to the Fort Wayne server";
+  setInterval(refreshFromServer, 5000);
 })();
