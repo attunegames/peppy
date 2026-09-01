@@ -172,3 +172,10 @@ main { padding-bottom: 34px; }
 .row label { flex: 1; display: flex; align-items: center; gap: 10px;
   color: var(--dim); font-size: 12px; }
 .row + .row { margin-top: 8px; }
+
+/* the rotation */
+.plist .crown { color: var(--accent2); font-size: 12px; margin-left: 6px; }
+.plist .sweeps { color: var(--accent2); font-size: 11px; letter-spacing: 0; }
+.plist li.playing { border-color: var(--accent); opacity: 0.85; }
+.plist .state { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
+#overlayButtons { flex-wrap: wrap; justify-content: center; }
