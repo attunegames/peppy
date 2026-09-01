@@ -54,11 +54,12 @@ ipcMain.handle("notify-blink", () => {
 
 ipcMain.handle("slippi-info", async () => {
   const d = await orchestrator();
+  const identity = d.readSlippiIdentity();   // who this PC is logged in as
   try {
     const { isoPath } = d.findSlippi();
-    return { ok: true, isoPath, characters: d.CHARACTERS };
+    return { ok: true, isoPath, characters: d.CHARACTERS, identity };
   } catch (err) {
-    return { ok: false, error: String(err.message ?? err), characters: d.CHARACTERS };
+    return { ok: false, error: String(err.message ?? err), characters: d.CHARACTERS, identity };
   }
 });
 

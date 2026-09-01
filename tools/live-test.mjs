@@ -10,16 +10,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createClient } from "@supabase/supabase-js";
+import { testDevice, signIn, rpc } from "./test-device.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CFG = JSON.parse(fs.readFileSync(path.join(ROOT, "resources", "config.json"), "utf-8"));
 
 // Fresh each run: a claimed code belongs to the device that claimed it, and
 // every run signs in as brand new anonymous devices.
-const n = () => String(Math.floor(Math.random() * 900) + 99);
-const A_CODE = `TSTA#${n()}`;
-const B_CODE = `TSTB#${n()}`;
+const A_CODE = "TSTA#001";
+const B_CODE = "TSTB#002";
 
 let pass = 0, fail = 0;
 const ok = (label, cond, extra = "") => {
@@ -27,35 +26,34 @@ const ok = (label, cond, extra = "") => {
   cond ? pass++ : fail++;
 };
 
-function memClient() {
-  const mem = {};
-  return createClient(CFG.supabaseUrl, CFG.supabaseKey, {
-    auth: {
-      storage: {
-        getItem: (k) => mem[k] ?? null,
-        setItem: (k, v) => { mem[k] = v; },
-        removeItem: (k) => { delete mem[k]; },
-      },
-      persistSession: true, autoRefreshToken: false, detectSessionInUrl: false,
-    },
-  });
+
+
+
+// Tests share the one real Fort Wayne queue, so a run that dies half way used
+// to leave players sitting in it and the next run would pair against those
+// ghosts. Wait for a clear room, and always clean up (see the finally below).
+async function waitForEmptyQueue(c, rpc, timeoutMs = 240000) {
+  const started = Date.now();
+  for (;;) {
+    const q = await rpc(c, "peppy_queue_list");
+    if (!q.length) return true;
+    if (Date.now() - started > timeoutMs) {
+      console.log(`(giving up waiting; ${q.length} player(s) still in the queue)`);
+      return false;
+    }
+    process.stdout.write(`
+waiting for the queue to clear (${q.length} left, offline players drop after 3 min)...   `);
+    await new Promise((r) => setTimeout(r, 5000));
+  }
 }
 
-const rpc = async (c, name, args = {}) => {
-  const { data, error } = await c.rpc(name, args);
-  if (error) throw new Error(`${name}: ${error.message}`);
-  return data;
-};
-
 const main = async () => {
-  const A = memClient(), B = memClient();
+  const A = testDevice("liveA"), B = testDevice("liveB");
+  devices = [A, B];           // so the crash handler can clean up
 
   // --- anonymous sign-in (device identity) ---
-  const a = await A.auth.signInAnonymously();
-  const b = await B.auth.signInAnonymously();
-  ok("anonymous sign-in works (device A)", !a.error && !!a.data.session, a.error?.message ?? "");
-  ok("anonymous sign-in works (device B)", !b.error && !!b.data.session, b.error?.message ?? "");
-  if (a.error || b.error) return;
+  ok("device A has a session", !!(await signIn(A, "device A")));
+  ok("device B has a session", !!(await signIn(B, "device B")));
 
   // --- claim codes ---
   const pa = await rpc(A, "peppy_claim_code", { p_code: A_CODE, p_name: "TesterA" });
@@ -85,6 +83,7 @@ const main = async () => {
   ok("cannot queue on someone else's behalf", !!inject.error, inject.error?.message ?? "INSERT SUCCEEDED");
 
   // --- queue ---
+  await waitForEmptyQueue(A, rpc);
   await rpc(A, "peppy_queue_set", { p_state: "waiting" });
   await rpc(B, "peppy_queue_set", { p_state: "waiting" });
   let q = await rpc(A, "peppy_queue_list");
@@ -160,4 +159,9 @@ const main = async () => {
   process.exit(fail ? 1 : 0);
 };
 
-main().catch((e) => { console.error("ERROR:", e.message); process.exit(1); });
+let devices = [];
+main().catch(async (e) => {
+  console.error("ERROR:", e.message);
+  for (const c of devices) { try { await c.rpc("peppy_queue_leave"); } catch { /* best effort */ } }
+  process.exit(1);
+});
