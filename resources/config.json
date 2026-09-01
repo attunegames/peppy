@@ -1,0 +1,6 @@
+{
+  "_comment": "The publishable (anon) key is designed to be public and ships in this open-source app. All access is gated by row-level security in backend/migrate-peppy.sql, not by hiding this key. The service_role/secret key must NEVER appear here.",
+  "supabaseUrl": "https://unrvhnanolbiqrpmdkha.supabase.co",
+  "supabaseKey": "sb_publishable_pz2abkKSuMxMCTHW9uzpvA_FcCksOhl",
+  "queueId": "fort-wayne"
+}

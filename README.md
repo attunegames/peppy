@@ -36,8 +36,12 @@ match; you just pick your character and play.
 - [x] Hidden launch + reveal at connect (watches Slippi's own log for
       "Connection success!" — no game-memory reading, stays pure Node)
 - [x] Packaged Windows build (`npm run package` → `dist/`)
-- [ ] Supabase backend (shared queue, friends, challenge handshake) — schema
-      draft in `backend/migrate-peppy.sql`; UI runs offline until then
+- [x] **Shared server** (Supabase): claim-your-code identity, live Fort Wayne
+      queue with the 5-minute accept rule, challenge handshake, friends,
+      recently-played. Schema + row-level security in
+      `backend/migrate-peppy.sql`; `node tools/live-test.mjs` exercises it
+      end to end (24 checks, including that the public key cannot write to
+      anyone else's rows). The app still works offline for direct challenges.
 - [ ] .slp result tracking, best-of-N sets
 - [ ] Real 2-client match against another person
 - [ ] Discord bot (queue announcements, opt-in DMs)
@@ -53,6 +57,16 @@ npm run package
 Produces `dist/Peppy-win32-x64/`. Zip it together with `READ-ME-FIRST.txt` and
 send it; the recipient needs their own Slippi Launcher, login and Melee ISO.
 Unsigned, so Windows SmartScreen will warn — the readme explains it.
+
+## Server setup (if you fork this)
+
+1. Create a Supabase project, then **Authentication -> Sign In / Providers ->
+   Anonymous sign-ins: on** (that is how "claim your code" works without
+   making anyone sign up).
+2. Run `backend/migrate-peppy.sql` in the SQL editor.
+3. Put your project URL and *publishable/anon* key in `resources/config.json`.
+   Never put the `service_role`/secret key there - the client is public, and
+   security comes from the row-level policies, not from hiding the key.
 
 ## Verifying a change
 
