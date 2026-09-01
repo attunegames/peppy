@@ -87,10 +87,17 @@ function render() {
   $("joinQueueBtn").classList.toggle("leave", myQueueState !== "out");
   $("spectateBtn").classList.toggle("hidden", myQueueState === "out");
   $("spectateBtn").textContent = myQueueState === "spectating" ? "JOIN POOL" : "GO SPECTATE";
+  const playing = backend.queue.filter((p) => p.state === "playing").length;
   $("queueStatus").textContent =
-    myQueueState === "out" ? "Nobody is waiting right now."
-      : myQueueState === "spectating" ? "You're spectating. Jump back in the pool whenever."
-        : "You're in the queue. Peppy blinks when a challenger shows up.";
+    myQueueState === "out"
+      ? (backend.queue.length
+          ? `${backend.queue.length} in the queue${playing ? ", a match is on" : ""}.`
+          : "Nobody is waiting right now.")
+      : myQueueState === "spectating"
+        ? "You're spectating. Jump back in the pool whenever."
+        : backend.queue.length > 2
+          ? "You're in the queue. Peppy pairs you up and blinks when you're on."
+          : "You're in the queue. Peppy blinks when a challenger shows up.";
 }
 
 function renderPeople(ul, items, actionFor) {
@@ -117,6 +124,27 @@ function renderPeople(ul, items, actionFor) {
     code.className = "code";
     code.textContent = item.code;
     who.append(dot, name, code);
+    if (item.isKing) {
+      const crown = document.createElement("span");
+      crown.className = "crown";
+      crown.textContent = "♛";           // holds the setup
+      crown.title = "winner - holding the setup";
+      who.append(crown);
+    }
+    if (item.sweeps > 0) {
+      const sw = document.createElement("span");
+      sw.className = "sweeps";
+      sw.textContent = `${item.sweeps} sweep${item.sweeps > 1 ? "s" : ""}`;
+      sw.title = "times they beat everyone in the room";
+      who.append(sw);
+    }
+    if (item.state === "playing") {
+      li.classList.add("playing");
+      const st = document.createElement("span");
+      st.className = "state";
+      st.textContent = "PLAYING";
+      who.append(st);
+    }
     li.append(who);
     if (isMe) {
       const badge = document.createElement("span");
@@ -238,12 +266,15 @@ bridge?.onMatchState(async (state) => {
   }
 });
 
-function showOverlay({ text, spinner, ready, accept = false }) {
+function showOverlay({ text, spinner, ready, accept = false, result = false, cancel = true }) {
   $("overlayText").textContent = text;
   $("overlaySpinner").classList.toggle("hidden", !spinner);
   $("readyBtn").classList.toggle("hidden", !ready);
   $("acceptBtn").classList.toggle("hidden", !accept);
   $("declineBtn").classList.toggle("hidden", !accept);
+  $("wonBtn").classList.toggle("hidden", !result);
+  $("lostBtn").classList.toggle("hidden", !result);
+  $("cancelBtn").classList.toggle("hidden", !cancel);
   $("overlay").classList.remove("hidden");
 }
 
@@ -292,6 +323,7 @@ async function refreshFromServer() {
     const rows = q.data ?? [];
     const asPerson = (row) => ({
       code: row.connect_code, name: row.display_name, online: row.online,
+      sweeps: row.sweeps ?? 0, isKing: !!row.is_king, state: row.state,
     });
     backend.queue = rows.filter((x) => x.state !== "spectating").map(asPerson);
     backend.spectators = rows.filter((x) => x.state === "spectating").map(asPerson);
@@ -320,6 +352,7 @@ Accept within ${mins} min.`,
 });
 
 $("acceptBtn").addEventListener("click", async () => {
+  if (!incomingId) return;      // a rotation pairing, handled by its own listener
   const res = await net.respond(incomingId, true);
   const code = $("overlayText").textContent.match(/\(([A-Z]+#\d+)\)/)?.[1];
   incomingId = null;
@@ -329,7 +362,8 @@ $("acceptBtn").addEventListener("click", async () => {
 });
 
 $("declineBtn").addEventListener("click", async () => {
-  if (incomingId) await net.respond(incomingId, false);
+  if (!incomingId) return;      // a rotation pairing, handled by its own listener
+  await net.respond(incomingId, false);
   incomingId = null;
   closeOverlay();
 });
@@ -349,8 +383,115 @@ Ready when you are.`,
   }
 });
 
+// ---- the rotation ----
+// Peppy proposes a match; accepting is also your ready, so once both sides
+// accept the game launches itself.
+let pairing = null;
+
+net?.onPairing((p) => {
+  bridge?.log("pairing proposed vs", p.other_code, "state", p.state);
+  if (challenge || pairing?.pairing_id === p.pairing_id) return;
+  pairing = p;
+  const mins = Math.max(0, Math.round((new Date(p.expires_at) - Date.now()) / 60000));
+  const crown = p.other_sweeps ? `  (${p.other_sweeps} sweep${p.other_sweeps > 1 ? "s" : ""})` : "";
+  showOverlay({
+    text: `You're up against ${p.other_name}${crown}
+(${p.other_code})
+
+Accept within ${mins} min.`,
+    spinner: false, ready: false, accept: true, cancel: false,
+  });
+  bridge?.notifyBlink();
+});
+
+net?.onPairingReady(async (p) => {
+  bridge?.log("pairing READY vs", p.other_code, "- launching");
+  if (!pairing || pairing.pairing_id !== p.pairing_id) pairing = p;
+  showOverlay({
+    text: `Both ready - setting up your match with ${p.other_name}…`,
+    spinner: true, ready: false, cancel: true,
+  });
+  lastOpponent = p.other_code;
+  pairing = null;
+  if (!bridge) return;
+  const res = await bridge.launchMatch({
+    opponentCode: p.other_code,
+    stageId: Number($("stageSel").value),
+    character: $("charSel").value,
+  });
+  if (!res.ok) { closeOverlay(); alert("Couldn't start the game:\n\n" + res.error); }
+});
+
+// Peppy read the result out of the replay.
+net?.onMatchResult((r) => {
+  const line = r.iWon ? "You won!" : "Good game.";
+  const swept = r.swept ? `
+
+SWEEP! You beat everyone here (${r.sweeps} total).
+Back of the line - someone else takes the setup.` : "";
+  showOverlay({ text: line + swept, spinner: false, ready: false, cancel: false });
+  setTimeout(closeOverlay, r.swept ? 5000 : 2000);
+  refreshFromServer();
+});
+
+// The replay could not be read - ask rather than guess.
+let askingAbout = null;
+net?.onAskResult((r) => {
+  askingAbout = r.opponentCode;
+  showOverlay({
+    text: `Who won against ${r.opponentCode}?
+(Peppy couldn't read the replay)`,
+    spinner: false, ready: false, result: true, cancel: false,
+  });
+});
+
+const answerResult = async (iWon) => {
+  if (!askingAbout) return closeOverlay();
+  const res = await net.reportResult(askingAbout, iWon, null);
+  askingAbout = null;
+  closeOverlay();
+  if (res?.ok && res.data?.[0]?.swept) {
+    showOverlay({ text: `SWEEP! You beat everyone here.
+Back of the line.`, spinner: false, cancel: false });
+    setTimeout(closeOverlay, 4000);
+  }
+  refreshFromServer();
+};
+$("wonBtn").addEventListener("click", () => answerResult(true));
+$("lostBtn").addEventListener("click", () => answerResult(false));
+
+$("acceptBtn").addEventListener("click", async () => {
+  if (pairing) {
+    const id = pairing.pairing_id;
+    showOverlay({ text: "Waiting for them to accept…", spinner: true, cancel: false });
+    const res = await net.pairingRespond(id, true);
+    if (!res.ok) { closeOverlay(); pairing = null; alert(res.error); }
+    return;   // onPairingReady launches once both sides are in
+  }
+  // otherwise this is a direct challenge (handled below)
+});
+
+$("declineBtn").addEventListener("click", async () => {
+  if (pairing) {
+    await net.pairingRespond(pairing.pairing_id, false);
+    pairing = null;
+    closeOverlay();
+    refreshFromServer();
+  }
+});
+
 // ---- boot ----
+window.addEventListener("error", (e) => {
+  bridge?.log("UI ERROR:", e.message, "at", e.filename + ":" + e.lineno);
+  $("statusbar").textContent = "app error: " + e.message;
+  $("statusbar").classList.add("bad");
+});
+window.addEventListener("unhandledrejection", (e) => {
+  bridge?.log("UI PROMISE REJECTION:", e.reason?.message ?? e.reason);
+});
+
 (async () => {
+ try {
   const fallback = ["FOX", "FALCO", "MARTH", "SHEIK", "JIGGLYPUFF", "PEACH", "CPTFALCON"];
   let chars = fallback, status = "browser preview - mock mode", detected = null;
   if (bridge) {
@@ -392,8 +533,10 @@ Ready when you are.`,
   render();
 
   // ---- connect to the shared server (optional) ----
-  if (!net) return;
+  if (!net) { bridge?.log("no net bridge"); return; }
+  bridge?.log("connecting to server...");
   const conn = await net.connect();
+  bridge?.log("connect result:", JSON.stringify(conn));
   serverUp = !!conn.ok;
   if (!serverUp) {
     $("queueHint").textContent = "Can't reach the Peppy server - direct challenges still work.";
@@ -402,8 +545,10 @@ Ready when you are.`,
   }
   // Claim our connect code so other people can find us.
   const claim = async (code) => {
-    if (!/^[A-Z]{1,7}#\d{1,3}$/.test(code)) return false;
-    const res = await net.claim(code, code.split("#")[0]);
+    bridge?.log("claiming", code);
+    if (!/^[A-Z]{1,7}#\d{1,3}$/.test(code)) { bridge?.log("code failed the format check:", code); return false; }
+    const res = await net.claim(code, detected?.displayName || code.split("#")[0]);
+    bridge?.log("claim result:", JSON.stringify(res).slice(0, 200));
     if (!res.ok) {
       $("queueHint").textContent = res.error;
       return false;
@@ -428,4 +573,9 @@ Ready when you are.`,
 
   $("statusbar").textContent = status + " | connected to the Fort Wayne server";
   setInterval(refreshFromServer, 5000);
+ } catch (err) {
+   bridge?.log("BOOT FAILED:", err?.message ?? err);
+   $("statusbar").textContent = "startup failed: " + (err?.message ?? err);
+   $("statusbar").classList.add("bad");
+ }
 })();

@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createClient } from "@supabase/supabase-js";
+import WebSocket from "ws";
 
 const CONFIG = JSON.parse(
   fs.readFileSync(new URL("../resources/config.json", import.meta.url), "utf-8"),
@@ -53,6 +54,10 @@ let lastError = null;
 function client() {
   if (!sb) {
     sb = createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey, {
+      // Electron 31 runs Node 20, which has no native WebSocket, and
+      // supabase-js refuses to start without one - even though Peppy only
+      // uses plain REST calls. Hand it an implementation.
+      realtime: { transport: WebSocket },
       auth: {
         storage: diskStorage,
         persistSession: true,
@@ -129,15 +134,25 @@ export const challengeRespond = (id, accept) =>
 export const challengeCancel = (id) => rpc("peppy_challenge_cancel", { p_id: id });
 export const inbox = () => rpc("peppy_inbox", {});
 
+// --- the rotation ---
+export const myPairing = async () => (await rpc("peppy_my_pairing", {}))?.[0] ?? null;
+export const pairingRespond = (id, accept) =>
+  rpc("peppy_pairing_respond", { p_id: id, p_accept: !!accept });
+export const reportResult = (opponentCode, iWon, matchKey = null) =>
+  rpc("peppy_report_result", {
+    p_opponent_code: opponentCode, p_i_won: !!iWon, p_match_key: matchKey,
+  });
+
 export const friendAdd = (code) => rpc("peppy_friend_add", { p_code: code });
 export const friendList = () => rpc("peppy_friend_list", {});
 export const recentList = () => rpc("peppy_recent_list", {});
 export const recordPlayed = (code) => rpc("peppy_record_played", { p_code: code });
 
-/** Watch for a challenge sent to us, and for our own outgoing one being taken. */
+/** Watch for a challenge sent to us, our outgoing one, and the rotation. */
 export async function poll(sentChallengeId) {
-  const out = { incoming: null, outgoing: null };
+  const out = { incoming: null, outgoing: null, pairing: null };
   out.incoming = (await inbox())?.[0] ?? null;
+  out.pairing = await myPairing();
   if (sentChallengeId) {
     const { data, error } = await client()
       .from("peppy_challenges")

@@ -9,6 +9,8 @@ let orch;
 let net;
 let pollTimer = null;
 let watchedChallenge = null;
+let lastPairingId = null;      // so we only announce a pairing once
+let matchContext = null;       // { opponentCode, startedAt } while a game runs
 
 async function orchestrator() {
   if (!orch) orch = await import("./orchestrator/dolphin.mjs");
@@ -44,6 +46,8 @@ app.on("window-all-closed", async () => {
   app.quit();
 });
 
+ipcMain.on("renderer-log", (_e, msg) => console.log("[ui]", msg));
+
 const send = (channel, payload) => win && !win.isDestroyed() && win.webContents.send(channel, payload);
 
 // ---- IPC ----
@@ -70,12 +74,48 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character })
     const { isoPath } = d.ensureSandbox();
     d.writeMatchConfigs({ opponentCode, stageId, character });
     const pid = d.launch({ isoPath });
-    d.hideUntilConnected(pid, (state) => send("match-state", state));
+    // remember what this match was, so the result can be read afterwards
+    matchContext = { opponentCode, startedAt: Date.now() };
+    d.hideUntilConnected(pid, async (state) => {
+      send("match-state", state);
+      if (state === "gone") await finishMatch();
+    });
     return { ok: true, pid };
   } catch (err) {
     return { ok: false, error: String(err.message ?? err) };
   }
 });
+
+// Melee closed. Find the replay it just wrote and report who won; if the
+// replay cannot be read, ask the player rather than guessing.
+async function finishMatch() {
+  const ctx = matchContext;
+  matchContext = null;
+  if (!ctx) return;
+  const n = await network();
+  if (!n.status().player) return;
+
+  const replays = await import("./orchestrator/replays.mjs");
+  const identity = (await orchestrator()).readSlippiIdentity();
+  // Slippi flushes the file on exit; give it a moment.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const file = replays.findReplaySince(ctx.startedAt - 60000);
+    if (!file || !identity) continue;
+    const result = replays.readResult(file, identity.connectCode, ctx.opponentCode);
+    if (!result) continue;
+    try {
+      const [row] = await n.reportResult(ctx.opponentCode, result.iWon, result.matchKey);
+      send("match-result", {
+        opponentCode: ctx.opponentCode, iWon: result.iWon,
+        swept: row?.swept ?? false, sweeps: row?.sweeps ?? 0, source: "replay",
+      });
+    } catch { /* server unhappy; the poll loop will resync */ }
+    return;
+  }
+  // couldn't tell from the replay - let the player say
+  send("ask-result", { opponentCode: ctx.opponentCode });
+}
 
 ipcMain.handle("kill-dolphin", async () => {
   (await orchestrator()).killAll();
@@ -128,6 +168,19 @@ ipcMain.handle("net-cancel", async (_e, { id }) => {
   return netCall((n) => n.challengeCancel(id ?? watchedChallenge));
 });
 
+// The rotation proposed a match: accepting is also your ready, so when both
+// sides have accepted the game launches by itself.
+ipcMain.handle("net-pairing-respond", async (_e, { id, accept }) => {
+  const res = await netCall((n) => n.pairingRespond(id, accept));
+  if (!accept) lastPairingId = null;
+  return res;
+});
+
+// Who won? Read it out of the replay Slippi just wrote, and only ask the
+// player if that fails.
+ipcMain.handle("report-result", async (_e, { opponentCode, iWon, matchKey }) =>
+  netCall((n) => n.reportResult(opponentCode, iWon, matchKey)));
+
 // One poll loop for the whole app: keeps presence alive, watches for an
 // incoming challenge (which makes the window blink) and for our own outgoing
 // challenge being accepted.
@@ -137,7 +190,20 @@ function startPolling() {
       const n = await network();
       if (!n.status().player) return;
       await n.heartbeat();
-      const { incoming, outgoing } = await n.poll(watchedChallenge);
+      const { incoming, outgoing, pairing } = await n.poll(watchedChallenge);
+
+      if (pairing && pairing.pairing_id !== lastPairingId && pairing.state === "pending") {
+        lastPairingId = pairing.pairing_id;
+        send("net-pairing", pairing);
+        if (win && !win.isFocused()) win.flashFrame(true);
+      }
+      // both sides accepted: this is the go signal
+      if (pairing && pairing.state === "ready") {
+        send("net-pairing-ready", pairing);
+        lastPairingId = null;
+      }
+      if (!pairing) lastPairingId = null;
+
       if (incoming) {
         send("net-incoming", incoming);
         if (win && !win.isFocused()) win.flashFrame(true);
