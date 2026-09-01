@@ -61,11 +61,11 @@ const main = async () => {
   ok("device A claimed its code", pa?.connect_code === A_CODE);
   ok("device B claimed its code", pb?.connect_code === B_CODE);
 
-  // --- a code can only be claimed once ---
-  let stolen = null;
-  try { await rpc(B, "peppy_claim_code", { p_code: A_CODE }); stolen = "no error"; }
-  catch (e) { stolen = e.message; }
-  ok("someone else cannot steal a claimed code", /already claimed/.test(stolen), stolen);
+  // A code is no longer locked to one machine: claiming it attaches THIS PC to
+  // that player, which is what lets one person use a desktop and a laptop.
+  // tools/multipc-test.mjs covers that behaviour (and its trade-off) properly;
+  // running it here would move device B onto player A and wreck the rest of
+  // this file.
 
   // --- bad codes rejected ---
   let badCode = null;
@@ -143,7 +143,8 @@ const main = async () => {
   await rpc(A, "peppy_friend_add", { p_code: B_CODE });
   const friendsA = await rpc(A, "peppy_friend_list");
   ok("friend added", friendsA.some((f) => f.connect_code === B_CODE));
-  ok("friend list shows not-yet-mutual", friendsA.find((f) => f.connect_code === B_CODE)?.mutual === false);
+  // (no "not yet mutual" check: these test players persist between runs, so
+  // B may already have added A back on a previous run)
   await rpc(B, "peppy_friend_add", { p_code: A_CODE });
   const friendsA2 = await rpc(A, "peppy_friend_list");
   ok("friendship becomes mutual", friendsA2.find((f) => f.connect_code === B_CODE)?.mutual === true);
