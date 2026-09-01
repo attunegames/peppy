@@ -2,8 +2,8 @@
 //   - inside Electron (window.peppy present): real launches
 //   - plain browser: mock mode for UI work
 //
-// `backend` is the seam where the shared server drops in later. Today it is a
-// local simulation for the queue/friends, while PLAY SOMEONE is fully real.
+// `backend` talks to the shared Peppy server when it can reach it, and falls
+// back to a local-only mode (direct challenges still work) when it cannot.
 
 const bridge = window.peppy ?? null;
 const $ = (id) => document.getElementById(id);
@@ -70,6 +70,7 @@ const backend = {
 
 let myQueueState = "out";
 let challenge = null;
+let lastOpponent = null;   // who we just played, recorded when Melee closes
 
 function render() {
   $("myCode").value = backend.me.code;
@@ -137,7 +138,13 @@ function btn(label, onClick) {
   return b;
 }
 
-function addFriend(person) {
+async function addFriend(person) {
+  if (serverUp) {
+    const res = await net.friendAdd(person.code);
+    if (!res.ok) { alert("Couldn't add that friend:\n\n" + res.error); return; }
+    await refreshFromServer();
+    return;
+  }
   if (!backend.friends.some((f) => f.code === person.code)) {
     backend.friends.push({ ...person });
     store.set("friends", backend.friends);
@@ -145,7 +152,12 @@ function addFriend(person) {
   render();
 }
 
-function rememberOpponent(code) {
+async function rememberOpponent(code) {
+  if (serverUp) {
+    await net.recordPlayed(code);   // records it for BOTH players
+    await refreshFromServer();
+    return;
+  }
   if (!backend.recent.some((r) => r.code === code)) {
     backend.recent.unshift({ code });
     backend.recent = backend.recent.slice(0, 8);
@@ -189,7 +201,7 @@ backend.on(async (event) => {
       if (!challenge) break;
       challenge.phase = "launching";
       showOverlay({ text: `Setting up your match…\nPeppy is picking ${$("charSel").value}.`, spinner: true, ready: false });
-      rememberOpponent(event.code);
+      lastOpponent = event.code;   // recorded once the match actually ends
       if (!bridge) { setTimeout(closeOverlay, 2000); break; }
       {
         const res = await bridge.launchMatch({
@@ -206,7 +218,13 @@ backend.on(async (event) => {
   }
 });
 
-bridge?.onMatchState((state) => {
+bridge?.onMatchState(async (state) => {
+  if (state === "gone" && lastOpponent) {
+    // Melee closed: now it counts as played, and both of us go back to
+    // waiting in the queue.
+    await rememberOpponent(lastOpponent);
+    lastOpponent = null;
+  }
   if (state === "hidden") {
     showOverlay({ text: "Connecting to your opponent…\nThe game will appear when you're in.", spinner: true, ready: false });
   } else if (state === "connected") {
