@@ -148,6 +148,65 @@ export const friendList = () => rpc("peppy_friend_list", {});
 export const recentList = () => rpc("peppy_recent_list", {});
 export const recordPlayed = (code) => rpc("peppy_record_played", { p_code: code });
 
+// --- spectating ---
+// Live game data is relayed over a realtime channel named after the player
+// broadcasting it, so spectators just subscribe to whoever is playing. This is
+// separate from every other call here: if it fails, nothing else notices.
+let castChannel = null;
+
+// Waits for the channel to actually join: sending before that silently falls
+// back to slow REST delivery and most of the stream is lost.
+export async function startCast(playerId) {
+  stopCast();
+  const ch = client().channel(`spectate-${playerId}`, {
+    config: { broadcast: { self: false, ack: false } },
+  });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("realtime join timed out")), 10000);
+    ch.subscribe((status) => {
+      if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
+      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        clearTimeout(timer); reject(new Error("realtime: " + status));
+      }
+    });
+  });
+  castChannel = ch;
+  return (b64) => {
+    try { ch.send({ type: "broadcast", event: "slp", payload: { d: b64 } }); }
+    catch { /* dropped frame; the spectator recovers on the next game */ }
+  };
+}
+
+export function stopCast() {
+  if (castChannel) { try { client().removeChannel(castChannel); } catch { /* ignore */ } castChannel = null; }
+}
+
+let watchChannel = null;
+
+export async function watchCast(playerId, onChunk) {
+  stopWatchCast();
+  const ch = client().channel(`spectate-${playerId}`, {
+    config: { broadcast: { self: false } },
+  });
+  ch.on("broadcast", { event: "slp" }, ({ payload }) => {
+    if (payload?.d) onChunk(payload.d);
+  });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("realtime join timed out")), 10000);
+    ch.subscribe((status) => {
+      if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
+      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        clearTimeout(timer); reject(new Error("realtime: " + status));
+      }
+    });
+  });
+  watchChannel = ch;
+}
+
+export function stopWatchCast() {
+  if (watchChannel) { try { client().removeChannel(watchChannel); } catch { /* ignore */ } watchChannel = null; }
+}
+
 /** Watch for a challenge sent to us, our outgoing one, and the rotation. */
 export async function poll(sentChallengeId) {
   const out = { incoming: null, outgoing: null, pairing: null };

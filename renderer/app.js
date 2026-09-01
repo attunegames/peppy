@@ -79,10 +79,13 @@ function render() {
 
   const inLists = myQueueState !== "out";
   $("queueLists").classList.toggle("hidden", !inLists);
-  if (inLists) {
-    renderPeople($("queueList"), backend.queue, () => null);
-    renderPeople($("spectateList"), backend.spectators, () => null);
-  }
+  const watchAction = (p) =>
+    p.state === "playing" && p.id && p.code !== backend.me.code
+      ? btn(watchingId === p.id ? "STOP" : "WATCH", () => toggleWatch(p))
+      : null;
+  renderPeople($("queueList"), backend.queue, watchAction);
+  renderPeople($("spectateList"), backend.spectators, () => null);
+  $("queueLists").classList.toggle("hidden", !inLists && !backend.queue.length);
   $("joinQueueBtn").textContent = myQueueState === "out" ? "JOIN QUEUE" : "LEAVE QUEUE";
   $("joinQueueBtn").classList.toggle("leave", myQueueState !== "out");
   $("spectateBtn").classList.toggle("hidden", myQueueState === "out");
@@ -324,6 +327,7 @@ async function refreshFromServer() {
     const asPerson = (row) => ({
       code: row.connect_code, name: row.display_name, online: row.online,
       sweeps: row.sweeps ?? 0, isKing: !!row.is_king, state: row.state,
+      id: row.player_id,
     });
     backend.queue = rows.filter((x) => x.state !== "spectating").map(asPerson);
     backend.spectators = rows.filter((x) => x.state === "spectating").map(asPerson);
@@ -380,6 +384,43 @@ Ready when you are.`,
   } else {
     closeOverlay();
     alert(`${challenge.code} ${c.state} the challenge.`);
+  }
+});
+
+// ---- spectating ----
+// Watching someone opens Slippi's playback build following their live match a
+// few seconds behind, rebuilt from the stream they broadcast.
+let watchingId = null;
+
+async function toggleWatch(person) {
+  if (!bridge) return;
+  if (watchingId === person.id) {
+    await bridge.net.spectateStop();
+    watchingId = null;
+    render();
+    return;
+  }
+  watchingId = person.id;
+  render();
+  const res = await bridge.net.spectateStart(person.id, person.name);
+  if (!res.ok) {
+    watchingId = null;
+    render();
+    alert("Couldn't start watching:\n\n" + res.error);
+  }
+}
+
+bridge?.net?.onSpectateState((s) => {
+  if (s.state === "connecting") {
+    $("queueHint").textContent = `Connecting to ${s.name}'s match…`;
+  } else if (s.state === "watching") {
+    $("queueHint").textContent = `Watching ${s.name} - the playback window is live.`;
+  } else if (s.state === "error") {
+    $("queueHint").textContent = "Couldn't watch: " + s.error;
+    watchingId = null;
+    render();
+  } else {
+    $("queueHint").textContent = "Stopped watching.";
   }
 });
 

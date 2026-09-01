@@ -17,6 +17,10 @@ async function orchestrator() {
   return orch;
 }
 
+async function spectating() {
+  return import("./orchestrator/spectate.mjs");
+}
+
 async function network() {
   if (!net) net = await import("./orchestrator/peppynet.mjs");
   return net;
@@ -76,6 +80,7 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character })
     const pid = d.launch({ isoPath });
     // remember what this match was, so the result can be read afterwards
     matchContext = { opponentCode, startedAt: Date.now() };
+    startCasting();          // let spectators watch (best effort)
     d.hideUntilConnected(pid, async (state) => {
       send("match-state", state);
       if (state === "gone") await finishMatch();
@@ -86,9 +91,33 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character })
   }
 });
 
+// Share our live match so people in the queue can watch. Entirely optional:
+// any failure here is logged and ignored, never affecting the match.
+async function startCasting() {
+  try {
+    const n = await network();
+    const me = n.status().player;
+    if (!me) return;
+    const sp = await spectating();
+    const publish = await n.startCast(me.id);
+    // Dolphin only opens its live feed once the game is up.
+    setTimeout(() => sp.startBroadcast(publish, (st) => send("cast-state", st)), 8000);
+  } catch (err) {
+    console.log("[cast] not broadcasting:", err.message ?? err);
+  }
+}
+
+async function stopCasting() {
+  try {
+    (await spectating()).stopBroadcast();
+    (await network()).stopCast();
+  } catch { /* nothing to stop */ }
+}
+
 // Melee closed. Find the replay it just wrote and report who won; if the
 // replay cannot be read, ask the player rather than guessing.
 async function finishMatch() {
+  await stopCasting();
   const ctx = matchContext;
   matchContext = null;
   if (!ctx) return;
@@ -116,6 +145,45 @@ async function finishMatch() {
   // couldn't tell from the replay - let the player say
   send("ask-result", { opponentCode: ctx.opponentCode });
 }
+
+// Watch someone else's match: subscribe to their stream, rebuild it locally,
+// and open Slippi's playback build once there is something to show.
+ipcMain.handle("spectate-start", async (_e, { playerId, name }) => {
+  try {
+    const sp = await spectating();
+    if (!sp.playbackAvailable()) {
+      return { ok: false, error: "Slippi's playback build isn't installed - open the Slippi Launcher once." };
+    }
+    const n = await network();
+    const d = await orchestrator();
+    sp.startWatching();
+    let opened = false, bytes = 0;
+    await n.watchCast(playerId, (b64) => {
+      bytes += Math.floor(b64.length * 0.75);
+      const file = sp.feed(b64);
+      // wait for a little data so playback has a real game to chase
+      if (!opened && file && bytes > 40000) {
+        opened = true;
+        const { isoPath } = d.findSlippi();
+        const res = sp.openPlayback(isoPath, file);
+        send("spectate-state", res.ok ? { state: "watching", name } : { state: "error", error: res.error });
+      }
+    });
+    send("spectate-state", { state: "connecting", name });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err.message ?? err) };
+  }
+});
+
+ipcMain.handle("spectate-stop", async () => {
+  try {
+    (await spectating()).stopWatching();
+    (await network()).stopWatchCast();
+  } catch { /* already stopped */ }
+  send("spectate-state", { state: "stopped" });
+  return { ok: true };
+});
 
 ipcMain.handle("kill-dolphin", async () => {
   (await orchestrator()).killAll();
