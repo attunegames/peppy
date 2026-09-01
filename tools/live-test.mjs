@@ -15,8 +15,11 @@ import { createClient } from "@supabase/supabase-js";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CFG = JSON.parse(fs.readFileSync(path.join(ROOT, "resources", "config.json"), "utf-8"));
 
-const A_CODE = "TSTA#001";
-const B_CODE = "TSTB#002";
+// Fresh each run: a claimed code belongs to the device that claimed it, and
+// every run signs in as brand new anonymous devices.
+const n = () => String(Math.floor(Math.random() * 900) + 99);
+const A_CODE = `TSTA#${n()}`;
+const B_CODE = `TSTB#${n()}`;
 
 let pass = 0, fail = 0;
 const ok = (label, cond, extra = "") => {
@@ -130,9 +133,12 @@ const main = async () => {
   ok("recently-played recorded for both sides",
     recentA.some((r) => r.connect_code === B_CODE) && recentB.some((r) => r.connect_code === A_CODE));
 
+  // Recording a match no longer touches the queue: with only these two in the
+  // pool they stay in-session and keep playing, which is the "uninterrupted
+  // until someone joins" rule. Releasing players is peppy_report_result's job.
   q = await rpc(A, "peppy_queue_list");
-  ok("players return to waiting after the match",
-    q.filter((r) => [A_CODE, B_CODE].includes(r.connect_code)).every((r) => r.state === "waiting"));
+  ok("a two-player session keeps playing after a recorded game",
+    q.filter((r) => [A_CODE, B_CODE].includes(r.connect_code)).every((r) => r.state === "playing"));
 
   // --- friends ---
   await rpc(A, "peppy_friend_add", { p_code: B_CODE });
