@@ -4,3 +4,4 @@ dist/
 .DS_Store
 tools/__pycache__/
 tools/.test-sessions/
+.claude/

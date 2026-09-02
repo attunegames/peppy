@@ -179,3 +179,20 @@ main { padding-bottom: 34px; }
 .plist li.playing { border-color: var(--accent); opacity: 0.85; }
 .plist .state { color: var(--dim); font-size: 10px; letter-spacing: 1px; }
 #overlayButtons { flex-wrap: wrap; justify-content: center; }
+
+/* costume picker: real colours instead of "Color 2" */
+.row label.stack { flex-direction: column; align-items: flex-start; gap: 8px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.swatch {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--dim); letter-spacing: 0;
+}
+.swatch .chip {
+  width: 34px; height: 34px; border-radius: 9px;
+  border: 2px solid var(--edge); box-shadow: inset 0 -6px 10px rgba(0,0,0,.25);
+}
+.swatch .cname { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.swatch:hover .chip { border-color: var(--dim); }
+.swatch.on .chip { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(87,196,143,.25), inset 0 -6px 10px rgba(0,0,0,.25); }
+.swatch.on .cname { color: var(--text); }
