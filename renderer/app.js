@@ -179,46 +179,69 @@ function colorChoice() { return Number($("colorSel").value) || 0; }
 
 function windowChoice() { return $("windowSel").value || "maximized"; }
 
+function niceName(c) { return c.charAt(0) + c.slice(1).toLowerCase(); }
+
+// Random is rolled here, where the costume table lives, so the rest of the app
+// only ever sees a real character and a costume that character actually has.
+function rollMatchup() {
+  let character = $("charSel").value;
+  if (character === "RANDOM") {
+    const real = [...$("charSel").options].map((o) => o.value).filter((v) => v !== "RANDOM");
+    character = real[Math.floor(Math.random() * real.length)] || "FOX";
+  }
+  const chosen = $("colorSel").value;
+  const color = chosen === "random"
+    ? Math.floor(Math.random() * window.costumesFor(character).length)
+    : Number(chosen) || 0;
+  return { character, color };
+}
+
 // Exactly one side of a match picks the stage, or both machines fight over the
 // stage select after game 1. In the queue the server decides (the challenger -
-// the later arrival - picks). For a direct challenge it is whoever sent it, and
-// with no server to say who that was, the lower connect code takes it so both
-// ends still agree.
+// the later arrival - picks). On a direct challenge it is the person being
+// challenged, and with no server to say who that was, the lower connect code
+// takes it so both ends still agree.
 function iPickTheStage(opponentCode) {
-  if (challenge?.iChallenged != null) return !!challenge.iChallenged;
+  if (challenge?.iChallenged != null) return !challenge.iChallenged;
   if (pairing?.i_pick_stage != null) return !!pairing.i_pick_stage;
   return backend.me.code < String(opponentCode || "");
 }
 
 // The costume list belongs to the character, so switching characters redraws it,
 // and a colour the new character doesn't have falls back to their default.
+const RANDOM_CHIP = "conic-gradient(#d0453c, #e5c73f, #4fa055, #4a6fd0, #8a5ec0, #d0453c)";
+
 function renderColors() {
-  const list = window.costumesFor($("charSel").value);
+  const character = $("charSel").value;
   const field = $("colorSel");
-  let picked = Number(field.value) || 0;
-  if (picked >= list.length) picked = 0;
-  field.value = String(picked);
-  store.set("color", field.value);
   const row = $("colorRow");
+  // With a random character there is no costume list to show yet, so the only
+  // honest option is a random costume too.
+  const list = character === "RANDOM" ? [] : window.costumesFor(character);
+  let picked = field.value;
+  if (character === "RANDOM" || picked === "random") picked = "random";
+  else if (!(Number(picked) < list.length)) picked = "0";
+  field.value = picked;
+  store.set("color", picked);
+
   row.innerHTML = "";
-  list.forEach(([name, hex], i) => {
+  const swatch = (value, name, background) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "swatch" + (i === picked ? " on" : "");
+    b.className = "swatch" + (value === picked ? " on" : "");
     b.title = name;
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.style.background = hex;
+    chip.style.background = background;
     const label = document.createElement("span");
     label.className = "cname";
     label.textContent = name;
     b.append(chip, label);
-    b.addEventListener("click", () => {
-      field.value = String(i);
-      renderColors();
-    });
+    b.addEventListener("click", () => { field.value = value; renderColors(); });
     row.appendChild(b);
-  });
+  };
+  list.forEach(([name, hex], i) => swatch(String(i), name, hex));
+  swatch("random", "Random", RANDOM_CHIP);
 }
 
 function btn(label, onClick) {
@@ -290,15 +313,17 @@ backend.on(async (event) => {
     case "match-launch":
       if (!challenge) break;
       challenge.phase = "launching";
-      showOverlay({ text: `Setting up your match…\nPeppy is picking ${$("charSel").value}.`, spinner: true, ready: false });
+      challenge.roll = rollMatchup();   // resolves Random into a real pick
+      showOverlay({ text: `Setting up your match…\nPeppy is picking ${niceName(challenge.roll.character)}.`,
+        spinner: true, ready: false });
       lastOpponent = event.code;   // recorded once the match actually ends
       if (!bridge) { setTimeout(closeOverlay, 2000); break; }
       {
         const res = await bridge.launchMatch({
           opponentCode: event.code,
           stageId: stageChoice(),
-          character: $("charSel").value,
-          color: colorChoice(),
+          character: challenge.roll.character,
+          color: challenge.roll.color,
           stagePicker: iPickTheStage(event.code),
           windowMode: windowChoice(),
         });
@@ -535,11 +560,12 @@ net?.onPairingReady(async (p) => {
   lastOpponent = p.other_code;
   pairing = null;
   if (!bridge) return;
+  const roll = rollMatchup();
   const res = await bridge.launchMatch({
     opponentCode: p.other_code,
     stageId: stageChoice(),
-    character: $("charSel").value,
-    color: colorChoice(),
+    character: roll.character,
+    color: roll.color,
     // the server says which of us is the challenger, and the challenger picks.
     // Older servers don't send it, so fall back to a rule both ends agree on
     // rather than leaving nobody - or everybody - holding the role.
@@ -641,13 +667,16 @@ window.addEventListener("unhandledrejection", (e) => {
   }
   const sel = $("charSel");
   sel.innerHTML = "";
-  for (const c of chars) {
+  // Random first: Peppy rolls it per match, so it is a real pick, not the
+  // game's own random slot.
+  for (const c of ["RANDOM", ...chars]) {
     const o = document.createElement("option");
     o.value = c;
-    o.textContent = c.charAt(0) + c.slice(1).toLowerCase();
+    o.textContent = niceName(c);
     sel.appendChild(o);
   }
   sel.value = store.get("character", "FOX");
+  if (!sel.value) sel.value = "FOX";
   sel.addEventListener("change", () => {
     store.set("character", sel.value);
     renderColors();

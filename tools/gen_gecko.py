@@ -421,6 +421,50 @@ addi 1, 1, 0x90
 COLOR_TOKEN_VALUE = 0x5B   # placeholder byte the app rewrites per match
 
 
+def standdown_block(tag):
+    """Run the character automation for ONE character-select session only.
+
+    Peppy is there to connect two players, not to run their set: once game 1
+    starts, the cursor belongs to the player again, so they can counterpick
+    like any other friendlies session.
+
+    The hook only fires on the character select, so "a game happened" is simply
+    a gap in the frames we see: consecutive CSS frames differ by 0 or 1, while
+    coming back after a game either jumps far ahead or restarts the counter.
+    The two data words start life as `nop` (0x60000000), which is why the
+    unset test is against that value and the done test is `== 1`.
+    """
+    return f"""
+bl {tag}_AFTER_DATA
+nop
+nop
+{tag}_AFTER_DATA:
+mflr 29
+lwz 28, 4(29)
+cmpwi 28, 1
+beq {tag}_EXIT
+lis 27, 0x8048
+lwz 27, -0x62A0(27)
+lwz 28, 0(29)
+lis 26, 0x6000
+cmpw 28, 26
+beq {tag}_MARK
+cmpw 27, 28
+blt {tag}_STANDDOWN
+subf 26, 28, 27
+cmpwi 26, 120
+bgt {tag}_STANDDOWN
+{tag}_MARK:
+stw 27, 0(29)
+b {tag}_GO
+{tag}_STANDDOWN:
+li 26, 1
+stw 26, 4(29)
+b {tag}_EXIT
+{tag}_GO:
+"""
+
+
 def build_charpick_asm(char_name, with_color=True):
     """Park the CSS cursor on the target icon, every frame, until it is chosen.
 
@@ -455,7 +499,7 @@ bne CP_EXIT
 lbz 31, -0x49AA(13)
 cmpwi 31, 0
 bne CP_EXIT
-
+{standdown_block("CP")}
 lis 31, 0x8000
 ori 31, 31, 0x5614
 lwz 31, 0(31)
@@ -509,7 +553,7 @@ addi 1, 1, 0x60
 
 # Pulse A once per frame while the cursor holds its token. Port derivation
 # mirrors the game: one door -> mnCharSel_804D6CF0, otherwise cursor->x4.
-CHARPRESS_ASM = """
+CHARPRESS_ASM = f"""
 stwu 1, -0x60(1)
 mflr 0
 stw 0, 0x5C(1)
@@ -526,7 +570,7 @@ bne PR_EXIT
 lbz 31, -0x49AA(13)
 cmpwi 31, 0
 bne PR_EXIT
-
+{standdown_block("PR")}
 lbz 30, -0x49B0(13)
 cmpwi 30, 4
 bge PR_EXIT
