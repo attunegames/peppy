@@ -82,3 +82,25 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("the colour swatches are not wrapped in a <label>",
     lastLabel === -1 || before.slice(lastLabel).includes("</label>"));
 }
+
+// --- the poll loop must announce a pairing once, not on every tick ---
+{
+  const { makePairingGate } = await import("./orchestrator/pairing-gate.mjs");
+  const gate = makePairingGate();
+  const pending = { pairing_id: "p1", state: "pending" };
+  const ready = { pairing_id: "p1", state: "ready" };
+
+  ok("a new pairing is announced", gate(pending) === "pending");
+  ok("the same pending pairing is not re-announced", gate(pending) === null);
+  ok("both-ready fires the go signal", gate(ready) === "ready");
+  // This is the bug that relaunched Melee every 4s: 'ready' stays true on the
+  // server for the whole match, so the poll sees it over and over.
+  ok("a pairing that stays ready does not relaunch the match",
+    [gate(ready), gate(ready), gate(ready)].every((s) => s === null));
+  ok("the gate resets when the pairing is over", gate(null) === null);
+  ok("the next pairing is announced normally",
+    gate({ pairing_id: "p2", state: "pending" }) === "pending" &&
+    gate({ pairing_id: "p2", state: "ready" }) === "ready");
+  ok("a ready pairing seen with no pending first still launches",
+    makePairingGate()({ pairing_id: "p3", state: "ready" }) === "ready");
+}

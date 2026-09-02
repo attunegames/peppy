@@ -486,7 +486,14 @@ Accept within ${mins} min.`,
   bridge?.notifyBlink();
 });
 
+let launchedPairing = null;    // never launch the same pairing twice
+
 net?.onPairingReady(async (p) => {
+  if (launchedPairing === p.pairing_id) {
+    bridge?.log("already launched pairing", p.pairing_id, "- ignoring");
+    return;
+  }
+  launchedPairing = p.pairing_id;
   bridge?.log("pairing READY vs", p.other_code, "- launching");
   if (!pairing || pairing.pairing_id !== p.pairing_id) pairing = p;
   showOverlay({
