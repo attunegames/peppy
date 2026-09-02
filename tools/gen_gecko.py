@@ -422,44 +422,50 @@ COLOR_TOKEN_VALUE = 0x5B   # placeholder byte the app rewrites per match
 
 
 def standdown_block(tag):
-    """Run the character automation for ONE character-select session only.
+    """Run the CURSOR automation for one character-select session only.
 
     Peppy is there to connect two players, not to run their set: once game 1
     starts, the cursor belongs to the player again, so they can counterpick
-    like any other friendlies session.
+    like any other friendlies session. The costume is NOT part of this - see
+    build_charpick_asm - because Slippi blocks the costume buttons online, so
+    the only way a chosen colour survives into game 2 is for Peppy to keep
+    writing it.
 
     The hook only fires on the character select, so "a game happened" is simply
     a gap in the frames we see: consecutive CSS frames differ by 0 or 1, while
     coming back after a game either jumps far ahead or restarts the counter.
-    The two data words start life as `nop` (0x60000000), which is why the
-    unset test is against that value and the done test is `== 1`.
+    The two data words start life as `nop` (0x60000000), which is why the unset
+    test is against that value and the done test is `== 1`.
+
+    Uses r26-r28 and r31 only: r25/r29/r30 are live by the time CharPick calls
+    this (port, cursor object, selection).
     """
     return f"""
 bl {tag}_AFTER_DATA
 nop
 nop
 {tag}_AFTER_DATA:
-mflr 29
-lwz 28, 4(29)
-cmpwi 28, 1
+mflr 28
+lwz 27, 4(28)
+cmpwi 27, 1
 beq {tag}_EXIT
-lis 27, 0x8048
-lwz 27, -0x62A0(27)
-lwz 28, 0(29)
-lis 26, 0x6000
-cmpw 28, 26
+lis 26, 0x8048
+lwz 26, -0x62A0(26)
+lwz 27, 0(28)
+lis 31, 0x6000
+cmpw 27, 31
 beq {tag}_MARK
-cmpw 27, 28
+cmpw 26, 27
 blt {tag}_STANDDOWN
-subf 26, 28, 27
-cmpwi 26, 120
+subf 31, 27, 26
+cmpwi 31, 120
 bgt {tag}_STANDDOWN
 {tag}_MARK:
-stw 27, 0(29)
+stw 26, 0(28)
 b {tag}_GO
 {tag}_STANDDOWN:
-li 26, 1
-stw 26, 4(29)
+li 31, 1
+stw 31, 4(28)
 b {tag}_EXIT
 {tag}_GO:
 """
@@ -473,10 +479,17 @@ def build_charpick_asm(char_name, with_color=True):
     real cursor and letting the game's own hit-test see it does.
 
     Costume is different. Slippi disables the in-game costume buttons on the
-    online CSS (PreventColorChange), and the lock-in simply reads the colour
-    byte out of the selection - so once the character is chosen, the chosen
-    colour is written there directly and kept there. The value is a sentinel so
-    the app can set it per match without regenerating 25 x 6 payloads.
+    online CSS (PreventColorChange), so pressing X/Y the way we press A does
+    nothing - the only way to set a costume is to write the byte the lock-in
+    reads. That write therefore keeps running for the WHOLE session, which is
+    what makes the colour stick into game 2 and beyond. It is deliberately
+    limited to the character Peppy picked: the costume index was validated
+    against that character's costume list, and stamping it onto whatever else
+    the player switches to could name a costume that character does not have.
+    The value is a sentinel so the app can set it per match without
+    regenerating 25 x 6 payloads.
+
+    The CURSOR is what stands down after game 1 - see standdown_block.
     """
     ckind, tx, ty = CHAR_TABLE[char_name.upper()]
     color_block = (
@@ -499,7 +512,7 @@ bne CP_EXIT
 lbz 31, -0x49AA(13)
 cmpwi 31, 0
 bne CP_EXIT
-{standdown_block("CP")}
+
 lis 31, 0x8000
 ori 31, 31, 0x5614
 lwz 31, 0(31)
@@ -537,6 +550,7 @@ cmpwi 26, {ckind}
 bne CP_PICK
 {color_block}b CP_EXIT
 CP_PICK:
+{standdown_block("CP")}
 
 {_load_word(31, _f32_bits(tx))}stw 31, 0xC(29)
 {_load_word(31, _f32_bits(ty))}stw 31, 0x10(29)

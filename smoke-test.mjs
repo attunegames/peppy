@@ -144,9 +144,11 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
     !/PauseOnFocusLost\s*=\s*True/i.test(fs.readFileSync(ini, "utf8")));
 }
 
-// --- the character automation runs for game 1 only ---
+// --- the CURSOR runs for game 1 only; the costume keeps being written ---
 // Peppy connects players; it does not run their set. After game 1 the cursor
-// belongs to the player again so they can counterpick.
+// belongs to the player again so they can counterpick. The costume is
+// different: Slippi blocks the costume buttons online, so the only way a
+// chosen colour survives into game 2 is for Peppy to keep writing it.
 //
 // This mirrors the state machine compiled into $CharPick / $CharPress: two data
 // words that start as `nop` (0x60000000), the frame the hook last saw, and a
@@ -187,4 +189,12 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   g(400);
   ok("a dropped frame is not a game", g(402) === "pick");
   ok("a two-second gap is a game", g(600) === "exit");
+
+  // In the payload the costume write sits BEFORE the stand-down, on the branch
+  // taken once the character is already selected - so it runs every game.
+  // 3BE0005B = li r31, <costume>;  3FE06000 = the stand-down's unset test.
+  const pick = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8")).charPick.FOX;
+  ok("the costume is written before the cursor stands down",
+    pick.indexOf("3BE0005B") > -1 && pick.indexOf("3FE06000") > -1 &&
+    pick.indexOf("3BE0005B") < pick.indexOf("3FE06000"));
 }
