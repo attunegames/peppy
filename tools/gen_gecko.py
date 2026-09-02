@@ -105,8 +105,16 @@ stb 3, -0x5036(13)
 """
 
 
-def lockin_block(stage_id):
-    """FN_TX_LOCK_IN equivalent: EXI 0xB5 with a 10-byte selections payload."""
+def lockin_block(stage_id, random_stage=False):
+    """FN_TX_LOCK_IN equivalent: EXI 0xB5 with a 10-byte selections payload.
+
+    The stage fields are a value plus an option byte: option 1 means "use this
+    stage id", option 3 means "random" (and the id is ignored). That is the
+    same pair the game itself sends, so random here is the game's own random
+    legal stage, not a list Peppy invents.
+    """
+    stage_value = 0 if random_stage else stage_id
+    stage_opt = 3 if random_stage else 1
     return f"""
 li 3, 10
 {call(ALLOC)}
@@ -125,9 +133,9 @@ lbz 3, 0x73(4)
 stb 3, 3(31)
 li 3, 1
 stb 3, 4(31)
-li 3, {stage_id}
+li 3, {stage_value}
 sth 3, 5(31)
-li 3, 1
+li 3, {stage_opt}
 stb 3, 7(31)
 lbz 3, -0x5060(13)
 stb 3, 8(31)
@@ -223,7 +231,7 @@ mr 3, 31
 """
 
 
-def build_autodirect_asm(stage_id, stage_picker):
+def build_autodirect_asm(stage_id, stage_picker, random_stage=False):
     """Two phases, tracked in a flag word stored in the code's own body.
 
     phase 1 (matchmaking idle): fetch the code, take a role, lock in, search.
@@ -285,7 +293,7 @@ cmpwi 3, 0
 bne EXIT
 {FETCH_CODE}
 {roles_block(stage_picker)}
-{lockin_block(stage_id)}
+{lockin_block(stage_id, random_stage)}
 {FIND_MATCH}
 li 3, 1
 stw 3, 0(30)
@@ -318,7 +326,7 @@ beq DO_RELOCK
 b EXIT
 DO_RELOCK:
 {roles_block(stage_picker)}
-{lockin_block(stage_id)}
+{lockin_block(stage_id, random_stage)}
 
 EXIT:
 lmw 25, 0x20(1)
@@ -410,14 +418,26 @@ addi 1, 1, 0x90
 """
 
 
-def build_charpick_asm(char_name):
+COLOR_TOKEN_VALUE = 0x5B   # placeholder byte the app rewrites per match
+
+
+def build_charpick_asm(char_name, with_color=True):
     """Park the CSS cursor on the target icon, every frame, until it is chosen.
 
     Writing the selection struct directly does NOT work: the screen stays on
     "Select your character" because the CSS state machine never ran. Moving the
     real cursor and letting the game's own hit-test see it does.
+
+    Costume is different. Slippi disables the in-game costume buttons on the
+    online CSS (PreventColorChange), and the lock-in simply reads the colour
+    byte out of the selection - so once the character is chosen, the chosen
+    colour is written there directly and kept there. The value is a sentinel so
+    the app can set it per match without regenerating 25 x 6 payloads.
     """
     ckind, tx, ty = CHAR_TABLE[char_name.upper()]
+    color_block = (
+        f"li 31, {COLOR_TOKEN_VALUE}\nstb 31, 0x73(30)\n" if with_color else ""
+    )
     return f"""
 stwu 1, -0x60(1)
 mflr 0
@@ -467,9 +487,12 @@ cmpwi 26, 0
 beq CP_EXIT
 mulli 31, 25, 0x24
 add 26, 26, 31
+mr 30, 26
 lbz 26, 0x70(26)
 cmpwi 26, {ckind}
-beq CP_EXIT
+bne CP_PICK
+{color_block}b CP_EXIT
+CP_PICK:
 
 {_load_word(31, _f32_bits(tx))}stw 31, 0xC(29)
 {_load_word(31, _f32_bits(ty))}stw 31, 0x10(29)
@@ -587,11 +610,11 @@ def _emit_c2(asm_text, hook_addr, trailing_words):
     return "\n".join(out)
 
 
-def assemble(stage_id=0x1F, stage_picker=True):
+def assemble(stage_id=0x1F, stage_picker=True, random_stage=False):
     # trailing: re-materialise `li r0,0` (the instruction before the hook), then
     # the instruction the hook replaced
-    return _emit_c2(build_autodirect_asm(stage_id, stage_picker), HOOK_ADDR,
-                    [0x38000000, ORIG_INSTR])
+    return _emit_c2(build_autodirect_asm(stage_id, stage_picker, random_stage),
+                    HOOK_ADDR, [0x38000000, ORIG_INSTR])
 
 
 def assemble_boot(guard_level=3):
@@ -605,8 +628,8 @@ def assemble_boot(guard_level=3):
                     [BOOT_ORIG_INSTR])
 
 
-def assemble_charpick(char_name):
-    return _emit_c2(build_charpick_asm(char_name), CHARPICK_HOOK_ADDR,
+def assemble_charpick(char_name, with_color=True):
+    return _emit_c2(build_charpick_asm(char_name, with_color), CHARPICK_HOOK_ADDR,
                     [CHARPICK_ORIG_INSTR])
 
 
