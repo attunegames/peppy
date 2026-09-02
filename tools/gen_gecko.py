@@ -27,6 +27,8 @@ because nothing there is transmitted except the lock-in message.
 Usage:  python tools/export_geckos.py     (writes resources/geckos.json)
 Requires: pip install keystone-engine
 """
+import pathlib
+import re
 import struct
 
 import keystone
@@ -69,6 +71,25 @@ CHAR_TABLE = {
     "GAMEANDWATCH": (0x03, 4.4, 4.5), "MARTH": (0x09, 11.4, 4.5),
     "ROY": (0x17, 17.9, 4.5),
 }
+
+
+def costume_counts():
+    """How many costumes each character has, read from renderer/costumes.js.
+
+    That file is the app's costume table; baking the counts in from the same
+    place means a payload can never believe in a colour the picker cannot
+    offer, or refuse one it can.
+    """
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "renderer" / "costumes.js").read_text(encoding="utf-8")
+    counts = {}
+    for line in src.splitlines():
+        m = re.match(r"\s*([A-Z]+):\s*\[(.+)\],\s*$", line)
+        if m:
+            counts[m.group(1)] = m.group(2).count('["')
+    missing = [n for n in CHAR_TABLE if n not in counts]
+    assert not missing, f"no costumes listed for {missing}"
+    return counts
 
 
 def call(addr):
@@ -492,9 +513,6 @@ def build_charpick_asm(char_name, with_color=True):
     The CURSOR is what stands down after game 1 - see standdown_block.
     """
     ckind, tx, ty = CHAR_TABLE[char_name.upper()]
-    color_block = (
-        f"li 31, {COLOR_TOKEN_VALUE}\nstb 31, 0x73(30)\n" if with_color else ""
-    )
     return f"""
 stwu 1, -0x60(1)
 mflr 0
@@ -547,9 +565,7 @@ add 26, 26, 31
 mr 30, 26
 lbz 26, 0x70(26)
 cmpwi 26, {ckind}
-bne CP_PICK
-{color_block}b CP_EXIT
-CP_PICK:
+beq CP_EXIT
 {standdown_block("CP")}
 
 {_load_word(31, _f32_bits(tx))}stw 31, 0xC(29)
@@ -567,7 +583,32 @@ addi 1, 1, 0x60
 
 # Pulse A once per frame while the cursor holds its token. Port derivation
 # mirrors the game: one door -> mnCharSel_804D6CF0, otherwise cursor->x4.
-CHARPRESS_ASM = f"""
+def build_charpress_asm(char_name, costumes):
+    """Press the buttons a player would press: A to choose, X to reach a colour.
+
+    A is set the way the game reads it - a bit in the pad status - because the
+    CSS only reacts to real presses. The costume works the same way, and it has
+    to: writing the costume byte ourselves sets the value but not whatever else
+    the game does when you press X, and the colour did not survive into game 2.
+
+    Peppy cannot know how many X presses a colour is: it depends on where the
+    costume already sits. So it does what a person does - press, look, press
+    again - and stops the moment the game's own costume byte matches. Melee
+    wraps around, so any colour that character actually has is reachable.
+
+    The costume value is a sentinel the app rewrites per match. If it is ever
+    out of range for this character no X is pressed at all: cycling would never
+    match and Peppy would sit on the button forever.
+
+    Both presses stop once the CSS state byte goes non-zero - the point where
+    the opponent is connected, Slippi locks colours, and the screen is the
+    players' again. When there is nothing left to press this returns without
+    touching the pad at all: while it is pressing it has to clear the button
+    between presses, and doing that after it is finished would swallow the
+    player's own A and X.
+    """
+    ckind, _, _ = CHAR_TABLE[char_name.upper()]
+    return f"""
 stwu 1, -0x60(1)
 mflr 0
 stw 0, 0x5C(1)
@@ -582,6 +623,18 @@ cmpwi 31, 8
 bne PR_EXIT
 
 lbz 31, -0x49AA(13)
+cmpwi 31, 0
+bne PR_EXIT
+
+lis 31, 0x8000
+ori 31, 31, 0x5614
+lwz 31, 0(31)
+cmpwi 31, 0
+beq PR_EXIT
+lwz 31, 0(31)
+cmpwi 31, 0
+beq PR_EXIT
+lbz 31, 1(31)
 cmpwi 31, 0
 bne PR_EXIT
 {standdown_block("PR")}
@@ -610,6 +663,28 @@ PR_HAVE_PORT:
 cmpwi 28, 4
 bge PR_EXIT
 
+li 25, 0x100
+lwz 27, -0x49F0(13)
+cmpwi 27, 0
+beq PR_BUTTON
+mulli 26, 28, 0x24
+add 27, 27, 26
+lbz 26, 0x70(27)
+cmpwi 26, {ckind}
+bne PR_BUTTON
+li 31, {COLOR_TOKEN_VALUE}
+cmpwi 31, {costumes}
+bge PR_DONE
+lbz 26, 0x73(27)
+cmpw 26, 31
+beq PR_DONE
+li 25, 0x400
+b PR_BUTTON
+
+PR_DONE:
+b PR_EXIT
+
+PR_BUTTON:
 lis 27, 0x804C
 ori 27, 27, 0x20BC
 mulli 31, 28, 0x44
@@ -624,18 +699,19 @@ lwz 31, -0x62A0(31)
 andi. 31, 31, 3
 bne PR_CLEAR
 lwz 26, 0(27)
-ori 26, 26, 0x100
+or 26, 26, 25
 stw 26, 0(27)
 lwz 26, 8(27)
-ori 26, 26, 0x100
+or 26, 26, 25
 stw 26, 8(27)
 b PR_EXIT
 PR_CLEAR:
+li 25, 0x500
 lwz 26, 0(27)
-rlwinm 26, 26, 0, 24, 22
+andc 26, 26, 25
 stw 26, 0(27)
 lwz 26, 8(27)
-rlwinm 26, 26, 0, 24, 22
+andc 26, 26, 25
 stw 26, 8(27)
 
 PR_EXIT:
@@ -691,12 +767,13 @@ def assemble_charpick(char_name, with_color=True):
                     [CHARPICK_ORIG_INSTR])
 
 
-def assemble_charpress():
-    return _emit_c2(CHARPRESS_ASM, CHARPRESS_HOOK_ADDR, [CHARPRESS_ORIG_INSTR])
+def assemble_charpress(char_name, costumes):
+    return _emit_c2(build_charpress_asm(char_name, costumes), CHARPRESS_HOOK_ADDR,
+                    [CHARPRESS_ORIG_INSTR])
 
 
 if __name__ == "__main__":
     print("# $AutoBoot");   print(assemble_boot())
     print("# $AutoDirect"); print(assemble())
     print("# $CharPick FOX"); print(assemble_charpick("FOX"))
-    print("# $CharPress"); print(assemble_charpress())
+    print("# $CharPress FOX"); print(assemble_charpress("FOX", 4))

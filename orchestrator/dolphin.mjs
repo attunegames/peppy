@@ -139,16 +139,19 @@ function buildGeckoIni({ stageId, character, color, stagePicker = true }) {
   let body = "[Gecko]\n$AutoDirect [peppy]\n" + autoDirect +
     "\n$AutoBoot [peppy]\n" + GECKOS.autoBoot;
   let enabled = "\n\n[Gecko_Enabled]\n$AutoDirect\n$AutoBoot\n";
-  let pick = character && GECKOS.charPick[character.toUpperCase()];
-  if (pick) {
-    // Costume: Slippi disables the in-game colour buttons on the online
-    // character select, so the choice is written straight into the selection
-    // that the lock-in reads.
-    const n = Math.max(0, Math.min(5, Number(color) || 0));
-    pick = pick.split(GECKOS.colorToken)
+  const who = character && character.toUpperCase();
+  const pick = who && GECKOS.charPick[who];
+  let press = who && GECKOS.charPress[who];
+  if (pick && press) {
+    // Costume: Peppy presses X to cycle to it, the way a player would, so the
+    // game sets the colour through its own path and it survives into game 2.
+    // A value this character does not have means no X press at all (the
+    // payload checks), so clamping here is about sending something sane.
+    const n = Math.max(0, Math.min((GECKOS.costumes?.[who] ?? 6) - 1, Number(color) || 0));
+    press = press.split(GECKOS.colorToken)
       .join(`3BE000${n.toString(16).toUpperCase().padStart(2, "0")}`);
     body += "\n$CharPick [peppy]\n" + pick +
-      "\n$CharPress [peppy]\n" + GECKOS.charPress;
+      "\n$CharPress [peppy]\n" + press;
     enabled += "$CharPick\n$CharPress\n";
   }
   return body + enabled;

@@ -43,8 +43,8 @@ ok("real Slippi install untouched (no peppy patches there)",
 d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: "random", character: "FOX", color: 3 });
 const ini2 = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
 ok("random stage uses the game's own random option", !ini2.includes("3860001F") && !ini2.includes("3860001C"));
-ok("colour 3 written into the pick", ini2.includes("3BE00003"));
-ok("colour placeholder is gone", !ini2.includes("3BE0005B"));
+ok("colour 3 is what Peppy presses X to reach", ini2.includes("3BE00003"));
+ok("the colour placeholder is gone", !ini2.includes("3BE0005B"));
 
 d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: 0x1F, character: "FOX", color: 0 });
 const ini3 = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
@@ -190,11 +190,31 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("a dropped frame is not a game", g(402) === "pick");
   ok("a two-second gap is a game", g(600) === "exit");
 
-  // In the payload the costume write sits BEFORE the stand-down, on the branch
-  // taken once the character is already selected - so it runs every game.
-  // 3BE0005B = li r31, <costume>;  3FE06000 = the stand-down's unset test.
-  const pick = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8")).charPick.FOX;
-  ok("the costume is written before the cursor stands down",
-    pick.indexOf("3BE0005B") > -1 && pick.indexOf("3FE06000") > -1 &&
-    pick.indexOf("3BE0005B") < pick.indexOf("3FE06000"));
+}
+
+// --- the costume is pressed for, not written ---
+// Writing the byte set the value but not whatever else the game does when you
+// press X, and the colour did not survive into game 2.
+{
+  const geckos = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8"));
+  ok("there is a press payload per character",
+    Object.keys(geckos.charPress).length === Object.keys(geckos.charPick).length);
+  ok("the costume lives in the press, not the cursor",
+    geckos.charPress.FOX.includes("3BE0005B") && !geckos.charPick.FOX.includes("3BE0005B"));
+  ok("the press knows each character's costume count",
+    geckos.costumes.FOX === 4 && geckos.costumes.MARTH === 5 && geckos.costumes.KIRBY === 6);
+
+  // 0x400 = X. It has to be in there, or nothing ever cycles the costume.
+  ok("X is among the buttons it can press", geckos.charPress.FOX.includes("3B200400"));
+
+  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "KIRBY", color: 5 });
+  const ini = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+  ok("Kirby's sixth costume is asked for", ini.includes("3BE00005"));
+
+  // Marth has five, so a sixth is nonsense - and cycling for a costume that
+  // does not exist would sit on the button forever.
+  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "MARTH", color: 5 });
+  const marth = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+  ok("a colour a character does not have is clamped, never pressed for",
+    marth.includes("3BE00004") && !marth.includes("3BE00005"));
 }
