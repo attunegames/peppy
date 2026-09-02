@@ -196,6 +196,10 @@ ipcMain.handle("spectate-stop", async () => {
   return { ok: true };
 });
 
+// Escape hatch: if the automatic reveal ever misses, the player can ask for
+// the window by hand instead of sitting in a match they can only hear.
+ipcMain.handle("reveal-match", async () => (await orchestrator()).revealNow());
+
 ipcMain.handle("kill-dolphin", async () => {
   (await orchestrator()).killAll();
   return { ok: true };

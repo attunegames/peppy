@@ -298,7 +298,8 @@ bridge?.onMatchState(async (state) => {
     lastOpponent = null;
   }
   if (state === "hidden") {
-    showOverlay({ text: "Connecting to your opponent…\nThe game will appear when you're in.", spinner: true, ready: false });
+    showOverlay({ text: "Connecting to your opponent…\nThe game will appear when you're in.",
+      spinner: true, ready: false, showGame: true });
   } else if (state === "connected") {
     showOverlay({ text: "Connected — have fun!", spinner: false, ready: false });
     setTimeout(closeOverlay, 1500);
@@ -310,7 +311,8 @@ bridge?.onMatchState(async (state) => {
   }
 });
 
-function showOverlay({ text, spinner, ready, accept = false, result = false, cancel = true }) {
+function showOverlay({ text, spinner, ready, accept = false, result = false, cancel = true,
+                      showGame = false }) {
   $("overlayText").textContent = text;
   $("overlaySpinner").classList.toggle("hidden", !spinner);
   $("readyBtn").classList.toggle("hidden", !ready);
@@ -319,6 +321,7 @@ function showOverlay({ text, spinner, ready, accept = false, result = false, can
   $("wonBtn").classList.toggle("hidden", !result);
   $("lostBtn").classList.toggle("hidden", !result);
   $("cancelBtn").classList.toggle("hidden", !cancel);
+  $("showGameBtn").classList.toggle("hidden", !showGame);
   $("overlay").classList.remove("hidden");
 }
 
@@ -329,6 +332,14 @@ function closeOverlay() {
 
 $("readyBtn").addEventListener("click", () => {
   if (challenge?.phase === "accepted") backend.confirmReady(challenge.code);
+});
+
+// If the game is running but its window never appeared, ask for it directly.
+$("showGameBtn").addEventListener("click", async () => {
+  const res = await bridge?.revealMatch();
+  if (!res?.ok) {
+    alert("Couldn't find the game window.\n\nIf you can hear the match it is running - try alt-tab.");
+  }
 });
 
 $("cancelBtn").addEventListener("click", async () => {

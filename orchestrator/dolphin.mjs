@@ -160,6 +160,13 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
   const realIni = path.join(SLIPPI_DIR, "netplay", "User", "Config", "Dolphin.ini");
   try {
     fs.copyFileSync(realIni, path.join(user, "Config", "Dolphin.ini"));
+    // Peppy hides the window on purpose while it drives the menus, so this
+    // setting would pause the emulator mid-launch and stall both sides.
+    const ini = path.join(user, "Config", "Dolphin.ini");
+    const text = fs.readFileSync(ini, "utf8");
+    if (/PauseOnFocusLost\s*=\s*True/i.test(text)) {
+      fs.writeFileSync(ini, text.replace(/PauseOnFocusLost\s*=\s*True/gi, "PauseOnFocusLost = False"));
+    }
   } catch { /* keep the copy we already have rather than refusing to play */ }
   // No GCPadNew: native adapter only. Peppy never uses virtual controllers.
   try {
@@ -198,6 +205,7 @@ export function launch({ isoPath }) {
 
 export function killAll() {
   if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+  stopHiding();
   try {
     execFileSync("taskkill", ["/F", "/IM", "Slippi Dolphin.exe"], { stdio: "ignore" });
   } catch { /* nothing running */ }
@@ -205,23 +213,128 @@ export function killAll() {
 }
 
 // --- window visibility -----------------------------------------------------
-// Dolphin owns its own windows, so we drive user32 ShowWindow by PID. Hiding
-// keeps the menu automation off-screen; the player only ever sees the game
-// once it is connected.
+// Dolphin opens TWO top-level windows: "Dolphin" (the emulator shell) and the
+// render window ("Faster Melee - Slippi ..."). Unless the player has
+// RenderToMain switched on - then there is only one, and the game draws inside
+// it.
+//
+// The old code drove Process.MainWindowHandle, which is wrong twice over: it
+// only ever returns ONE window (so the render window stayed on screen for most
+// people), and .NET only reports a handle for a VISIBLE window (so once hidden,
+// nothing could ever show it again). A tester with RenderToMain ended up in a
+// match he could hear but not see, with no way to get the window back.
+//
+// So: enumerate the windows ourselves, remember exactly which ones we hid, and
+// put exactly those back.
+const WIN_HELPER = `
+$src = @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class PeppyWin {
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  delegate bool EnumProc(IntPtr h, IntPtr p);
+  public static string List(uint target) {
+    var sb = new StringBuilder();
+    EnumWindows((h, p) => {
+      uint id; GetWindowThreadProcessId(h, out id);
+      if (id == target && GetWindowTextLength(h) > 0) {
+        var t = new StringBuilder(256); GetWindowText(h, t, 256);
+        sb.Append(h.ToInt64() + "~" + (IsWindowVisible(h) ? "1" : "0") + "~" + t.ToString() + ";");
+      }
+      return true;
+    }, IntPtr.Zero);
+    return sb.ToString();
+  }
+}
+"@
+Add-Type -TypeDefinition $src -ErrorAction SilentlyContinue
+function Get-Windows($target) {
+  [PeppyWin]::List($target) -split ';' | Where-Object { $_ } | ForEach-Object {
+    $f = $_ -split '~'
+    [pscustomobject]@{ H = [int64]$f[0]; Visible = ($f[1] -eq '1'); Title = $f[2] }
+  }
+}`;
 
-function showWindowsForPid(pid, mode /* 0 = hide, 5 = show */) {
-  const ps = `
-$sig = '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
-[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);'
-$w = Add-Type -MemberDefinition $sig -Name W -Namespace P -PassThru
-Get-Process -Id ${pid} -ErrorAction SilentlyContinue |
-  Where-Object { $_.MainWindowHandle -ne 0 } |
-  ForEach-Object { [void]$w::ShowWindow($_.MainWindowHandle, ${mode})
-                   if (${mode} -ne 0) { [void]$w::SetForegroundWindow($_.MainWindowHandle) } }`;
+const SPLIT_LINES = /\s+/;
+
+let hider = null;              // the child that keeps windows hidden while booting
+let hiddenHandles = new Set(); // what we actually hid, so we can show it back
+
+const powershell = (script, opts = {}) =>
+  execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8", timeout: 15000, ...opts });
+
+/** Keep Dolphin's windows hidden for the first `ms` while the menus are driven. */
+function hideWindows(pid, ms) {
+  stopHiding();
+  hiddenHandles = new Set();
+  const script = `${WIN_HELPER}
+$deadline = (Get-Date).AddMilliseconds(${ms})
+while ((Get-Date) -lt $deadline) {
+  foreach ($w in (Get-Windows ${pid})) {
+    if ($w.Visible) { [void][PeppyWin]::ShowWindow([IntPtr]$w.H, 0); Write-Output $w.H }
+  }
+  Start-Sleep -Milliseconds 200
+}`;
+  hider = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", script],
+    { stdio: ["ignore", "pipe", "ignore"] });
+  hider.stdout.on("data", (buf) => {
+    for (const line of String(buf).split(SPLIT_LINES)) {
+      const h = line.trim();
+      if (h) hiddenHandles.add(h);
+    }
+  });
+  hider.on("close", () => { hider = null; });
+}
+
+function stopHiding() {
+  if (hider) { try { hider.kill(); } catch { /* already gone */ } hider = null; }
+}
+
+/**
+ * Put the windows back. Shows exactly what we hid, plus - belt and braces - any
+ * window of Dolphin's that is still hidden and looks like the emulator or the
+ * game, in case we launched one we never recorded.
+ *
+ * Returns how many of Dolphin's windows are visible afterwards.
+ */
+function revealWindows(pid) {
+  stopHiding();
+  const csv = [...hiddenHandles].join(",");
+  const script = `${WIN_HELPER}
+foreach ($h in ('${csv}' -split ',' | Where-Object { $_ })) {
+  $ptr = [IntPtr][int64]$h
+  if ([PeppyWin]::IsWindow($ptr)) { [void][PeppyWin]::ShowWindow($ptr, 5) }
+}
+foreach ($w in (Get-Windows ${pid})) {
+  if (-not $w.Visible -and ($w.Title -eq 'Dolphin' -or $w.Title -like '*Faster Melee*' -or
+      $w.Title -like '*Slippi*' -or $w.Title -like '*GALE01*' -or $w.Title -like '*Melee*')) {
+    [void][PeppyWin]::ShowWindow([IntPtr]$w.H, 5)
+  }
+}
+$shown = @(Get-Windows ${pid} | Where-Object { $_.Visible })
+if ($shown.Count -gt 0) { [void][PeppyWin]::SetForegroundWindow([IntPtr]$shown[0].H) }
+$shown.Count`;
   try {
-    execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps],
-      { stdio: "ignore", timeout: 8000 });
-  } catch { /* window may not exist yet; the poller retries */ }
+    return Number(String(powershell(script)).trim()) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Manual escape hatch: show the running match's windows on demand. */
+export function revealNow() {
+  if (!dolphinProc?.pid) return { ok: false, error: "no match is running" };
+  const shown = revealWindows(dolphinProc.pid);
+  return { ok: shown > 0, shown };
 }
 
 /**
@@ -245,16 +358,16 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
   const reveal = (why) => {
     if (revealed) return;
     revealed = true;
-    showWindowsForPid(pid, 5);
+    let shown = revealWindows(pid);
+    // Showing a window can lose a race with Dolphin creating it. Never leave a
+    // player in a match they can hear but not see.
+    for (let retry = 0; retry < 3 && shown === 0; retry++) shown = revealWindows(pid);
     clearInterval(watchTimer);
     watchTimer = null;
     onState?.(why);
   };
 
   watchTimer = setInterval(() => {
-    // keep hiding: Dolphin can open its window a moment after launch
-    if (!revealed && Date.now() - started < 6000) showWindowsForPid(pid, 0);
-
     try {
       process.kill(pid, 0);
     } catch {
@@ -283,6 +396,9 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
     if (Date.now() - started > revealAfterMs) reveal("timeout");
   }, 500);
 
-  showWindowsForPid(pid, 0);
+  // A separate hider keeps every window of Dolphin's off screen while the
+  // patches drive the menus, including the render window that appears a few
+  // seconds in.
+  hideWindows(pid, 20000);
   onState?.("hidden");
 }
