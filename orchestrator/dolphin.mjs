@@ -392,8 +392,10 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
     // Showing a window can lose a race with Dolphin creating it. Never leave a
     // player in a match they can hear but not see.
     for (let retry = 0; retry < 3 && shown === 0; retry++) shown = revealWindows(pid);
-    clearInterval(watchTimer);
-    watchTimer = null;
+    // The watcher stays up. It used to stop here, which meant Peppy never saw
+    // Melee close after a match it had connected: no replay was read, no result
+    // was reported, and the pairing sat 'ready' on the server so the rotation
+    // could not move on.
     onState?.(why);
   };
 
@@ -406,6 +408,7 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
       onState?.("gone");
       return;
     }
+    if (revealed) return;         // from here we are only waiting for the exit
 
     if (fs.existsSync(log)) {
       let text = "";

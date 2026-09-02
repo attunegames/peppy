@@ -143,3 +143,48 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("pause-on-focus-loss stays off (Peppy hides the window on purpose)",
     !/PauseOnFocusLost\s*=\s*True/i.test(fs.readFileSync(ini, "utf8")));
 }
+
+// --- the character automation runs for game 1 only ---
+// Peppy connects players; it does not run their set. After game 1 the cursor
+// belongs to the player again so they can counterpick.
+//
+// This mirrors the state machine compiled into $CharPick / $CharPress: two data
+// words that start as `nop` (0x60000000), the frame the hook last saw, and a
+// done flag. The hook only runs on the character select, so "a game happened"
+// is a gap in the frames it sees.
+{
+  const NOP = 0x60000000;
+  const makeStandDown = () => {
+    let last = NOP, done = NOP;
+    return (frame) => {
+      if (done === 1) return "exit";                  // stood down for good
+      if (last !== NOP && (frame < last || frame - last > 120)) {
+        done = 1;
+        return "exit";
+      }
+      last = frame;
+      return "pick";
+    };
+  };
+
+  let g = makeStandDown();
+  ok("it picks on the first character-select frame", g(400) === "pick");
+  ok("it keeps picking through that session",
+    [401, 402, 402, 403].every((f) => g(f) === "pick"));
+
+  // game 1 happens: thousands of frames pass before the CSS comes back
+  ok("it stands down when the CSS returns after a game", g(9000) === "exit");
+  ok("it stays stood down for game 3 and beyond",
+    [9001, 9002, 12000].every((f) => g(f) === "exit"));
+
+  // some counters restart per scene instead of running on
+  g = makeStandDown();
+  g(400); g(401);
+  ok("a counter that restarts also counts as a game", g(12) === "exit");
+
+  // a dropped frame inside one session must not look like a game
+  g = makeStandDown();
+  g(400);
+  ok("a dropped frame is not a game", g(402) === "pick");
+  ok("a two-second gap is a game", g(600) === "exit");
+}
