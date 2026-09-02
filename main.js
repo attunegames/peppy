@@ -9,7 +9,7 @@ let orch;
 let net;
 let pollTimer = null;
 let watchedChallenge = null;
-let lastPairingId = null;      // so we only announce a pairing once
+let announcePairing = null;    // dedupes the poll's pairing signals
 let matchContext = null;       // { opponentCode, startedAt } while a game runs
 
 async function orchestrator() {
@@ -75,6 +75,13 @@ ipcMain.handle("slippi-info", async () => {
 ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, color }) => {
   const d = await orchestrator();
   try {
+    // Never restart a match that is already running: relaunching kills the
+    // Dolphin the player is sitting in. matchContext clears itself when Melee
+    // exits, so a genuine retry still works.
+    if (matchContext && matchContext.opponentCode === opponentCode) {
+      console.log("[match] already running vs", opponentCode, "- ignoring relaunch");
+      return { ok: true, alreadyRunning: true };
+    }
     // Close any Dolphin still running FIRST: on Windows a live process holds
     // its config and log files open, and writing them then fails with EBUSY.
     d.killAll();
@@ -256,7 +263,9 @@ ipcMain.handle("report-result", async (_e, { opponentCode, iWon, matchKey }) =>
 // One poll loop for the whole app: keeps presence alive, watches for an
 // incoming challenge (which makes the window blink) and for our own outgoing
 // challenge being accepted.
-function startPolling() {
+async function startPolling() {
+  const { makePairingGate } = await import("./orchestrator/pairing-gate.mjs");
+  announcePairing = makePairingGate();
   pollTimer = setInterval(async () => {
     try {
       const n = await network();
@@ -264,17 +273,14 @@ function startPolling() {
       await n.heartbeat();
       const { incoming, outgoing, pairing } = await n.poll(watchedChallenge);
 
-      if (pairing && pairing.pairing_id !== lastPairingId && pairing.state === "pending") {
-        lastPairingId = pairing.pairing_id;
+      // Announce each pairing once. It stays 'ready' on the server for the
+      // whole match, so sending it every tick would relaunch Melee every tick.
+      const signal = announcePairing(pairing);
+      if (signal === "pending") {
         send("net-pairing", pairing);
         if (win && !win.isFocused()) win.flashFrame(true);
       }
-      // both sides accepted: this is the go signal
-      if (pairing && pairing.state === "ready") {
-        send("net-pairing-ready", pairing);
-        lastPairingId = null;
-      }
-      if (!pairing) lastPairingId = null;
+      if (signal === "ready") send("net-pairing-ready", pairing);   // the go signal
 
       if (incoming) {
         send("net-incoming", incoming);
