@@ -588,24 +588,23 @@ def build_charpress_asm(char_name, costumes):
 
     A is set the way the game reads it - a bit in the pad status - because the
     CSS only reacts to real presses. The costume works the same way, and it has
-    to: writing the costume byte ourselves sets the value but not whatever else
-    the game does when you press X, and the colour did not survive into game 2.
+    to: writing the costume byte sets the value but not whatever else the game
+    does when you press X, and the colour did not survive into game 2.
 
-    Peppy cannot know how many X presses a colour is: it depends on where the
-    costume already sits. So it does what a person does - press, look, press
-    again - and stops the moment the game's own costume byte matches. Melee
-    wraps around, so any colour that character actually has is reachable.
+    A fresh direct connection always starts on the default costume, and this
+    code only ever runs on that first character select - from game 2 the screen
+    is the players' own. So the costume index IS the number of X presses, and
+    Peppy simply counts them out. The count lives in a data word (which starts
+    life as a `nop`, hence the 0x60000000 test) and is bumped only on the frames
+    a press is actually sent.
 
-    The costume value is a sentinel the app rewrites per match. If it is ever
-    out of range for this character no X is pressed at all: cycling would never
-    match and Peppy would sit on the button forever.
+    Costume 0 presses nothing. A costume this character does not have presses
+    nothing either, rather than counting past the end of the list and landing
+    somewhere arbitrary.
 
-    Both presses stop once the CSS state byte goes non-zero - the point where
-    the opponent is connected, Slippi locks colours, and the screen is the
-    players' again. When there is nothing left to press this returns without
-    touching the pad at all: while it is pressing it has to clear the button
-    between presses, and doing that after it is finished would swallow the
-    player's own A and X.
+    Once there is nothing left to press this returns without touching the pad at
+    all: while pressing it has to clear the button in between, and doing that
+    afterwards would swallow the player's own A and X.
     """
     ckind, _, _ = CHAR_TABLE[char_name.upper()]
     return f"""
@@ -664,27 +663,34 @@ cmpwi 28, 4
 bge PR_EXIT
 
 li 25, 0x100
-lwz 27, -0x49F0(13)
-cmpwi 27, 0
-beq PR_BUTTON
-mulli 26, 28, 0x24
-add 27, 27, 26
-lbz 26, 0x70(27)
+lwz 26, -0x49F0(13)
+cmpwi 26, 0
+beq PR_HAVE_BUTTON
+mulli 30, 28, 0x24
+add 26, 26, 30
+lbz 26, 0x70(26)
 cmpwi 26, {ckind}
-bne PR_BUTTON
+bne PR_HAVE_BUTTON
+
 li 31, {COLOR_TOKEN_VALUE}
 cmpwi 31, {costumes}
-bge PR_DONE
-lbz 26, 0x73(27)
+bge PR_EXIT
+bl PR_AFTER_COUNT
+nop
+PR_AFTER_COUNT:
+mflr 30
+lwz 26, 0(30)
+lis 27, 0x6000
+cmpw 26, 27
+bne PR_HAVE_COUNT
+li 26, 0
+stw 26, 0(30)
+PR_HAVE_COUNT:
 cmpw 26, 31
-beq PR_DONE
+bge PR_EXIT
 li 25, 0x400
-b PR_BUTTON
 
-PR_DONE:
-b PR_EXIT
-
-PR_BUTTON:
+PR_HAVE_BUTTON:
 lis 27, 0x804C
 ori 27, 27, 0x20BC
 mulli 31, 28, 0x44
@@ -698,6 +704,14 @@ lis 31, 0x8048
 lwz 31, -0x62A0(31)
 andi. 31, 31, 3
 bne PR_CLEAR
+
+cmpwi 25, 0x400
+bne PR_SET
+lwz 26, 0(30)
+addi 26, 26, 1
+stw 26, 0(30)
+
+PR_SET:
 lwz 26, 0(27)
 or 26, 26, 25
 stw 26, 0(27)
@@ -705,6 +719,7 @@ lwz 26, 8(27)
 or 26, 26, 25
 stw 26, 8(27)
 b PR_EXIT
+
 PR_CLEAR:
 li 25, 0x500
 lwz 26, 0(27)

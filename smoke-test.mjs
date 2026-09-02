@@ -194,7 +194,9 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
 
 // --- the costume is pressed for, not written ---
 // Writing the byte set the value but not whatever else the game does when you
-// press X, and the colour did not survive into game 2.
+// press X, and the colour did not survive into game 2. A fresh direct
+// connection starts on the default costume and Peppy only ever acts on that
+// first screen, so the costume index is simply the number of X presses.
 {
   const geckos = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8"));
   ok("there is a press payload per character",
@@ -204,8 +206,13 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("the press knows each character's costume count",
     geckos.costumes.FOX === 4 && geckos.costumes.MARTH === 5 && geckos.costumes.KIRBY === 6);
 
-  // 0x400 = X. It has to be in there, or nothing ever cycles the costume.
+  // 0x400 = X, 0x100 = A, 0x500 = both (cleared between presses).
   ok("X is among the buttons it can press", geckos.charPress.FOX.includes("3B200400"));
+  ok("A is still what chooses the character", geckos.charPress.FOX.includes("3B200100"));
+  // Two data words live in the payload: the stand-down (3FE06000 tests it) and
+  // the running press count (3F606000). Both start life as a nop.
+  ok("the press count survives between frames", geckos.charPress.FOX.includes("3F606000"));
+  ok("the presses stop after game 1", geckos.charPress.FOX.includes("3FE06000"));
 
   d.writeMatchConfigs({ opponentCode: "TEST#001", character: "KIRBY", color: 5 });
   const ini = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
