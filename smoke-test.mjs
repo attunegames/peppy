@@ -104,3 +104,42 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("a ready pairing seen with no pending first still launches",
     makePairingGate()({ pairing_id: "p3", state: "ready" }) === "ready");
 }
+
+// --- exactly one side of a match picks the stage ---
+// Both clients claiming the picker role is what sent game 2 to Princess
+// Peach's Castle and froze both machines.
+{
+  const geckos = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8"));
+  ok("a follower build exists", typeof geckos.autoDirectFollow === "string" &&
+    geckos.autoDirectFollow.length === geckos.autoDirect.length);
+  ok("the follower differs from the picker", geckos.autoDirectFollow !== geckos.autoDirect);
+
+  d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: d.STAGES.DREAMLAND,
+                        character: "FOX", stagePicker: true });
+  const picker = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+  ok("the picker names its stage", picker.includes("3860001C"));
+
+  d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: d.STAGES.DREAMLAND,
+                        character: "FOX", stagePicker: false });
+  const follower = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+  ok("the follower ships the follower build", follower.includes(geckos.autoDirectFollow));
+  ok("the follower names no stage of its own", !follower.includes("3860001C"));
+  ok("a follower asking for random still follows",
+    (d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: "random", character: "FOX",
+                           stagePicker: false }),
+     fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8")
+       .includes(geckos.autoDirectFollow)));
+}
+
+// --- the game window opens the way the player asked ---
+{
+  const ini = path.join(USER, "Config", "Dolphin.ini");
+  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "FOX", windowMode: "fullscreen" });
+  ok("fullscreen is set for a fullscreen match",
+    /^Fullscreen = True$/mi.test(fs.readFileSync(ini, "utf8")));
+  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "FOX", windowMode: "maximized" });
+  ok("a maximized match is not fullscreen",
+    /^Fullscreen = False$/mi.test(fs.readFileSync(ini, "utf8")));
+  ok("pause-on-focus-loss stays off (Peppy hides the window on purpose)",
+    !/PauseOnFocusLost\s*=\s*True/i.test(fs.readFileSync(ini, "utf8")));
+}

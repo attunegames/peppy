@@ -46,6 +46,15 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", async () => {
+  // Step out of the queue on the way out: the server would sweep us after 90
+  // seconds anyway, but people were being paired with an app that had closed.
+  try {
+    const n = await network();
+    if (n.status().player) await Promise.race([
+      n.queueLeave(),
+      new Promise((r) => setTimeout(r, 1500)),
+    ]);
+  } catch { /* offline, or never connected */ }
   (await orchestrator()).killAll();
   app.quit();
 });
@@ -72,7 +81,8 @@ ipcMain.handle("slippi-info", async () => {
 });
 
 // Launch a direct match: hidden Dolphin, revealed once actually connected.
-ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, color }) => {
+ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, color,
+                                            stagePicker = true, windowMode = "maximized" }) => {
   const d = await orchestrator();
   try {
     // Never restart a match that is already running: relaunching kills the
@@ -87,7 +97,7 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     d.killAll();
     await new Promise((r) => setTimeout(r, 400));
     const { isoPath } = d.ensureSandbox();
-    d.writeMatchConfigs({ opponentCode, stageId, character, color });
+    d.writeMatchConfigs({ opponentCode, stageId, character, color, stagePicker, windowMode });
     const pid = d.launch({ isoPath });
     // remember what this match was, so the result can be read afterwards
     matchContext = { opponentCode, startedAt: Date.now() };

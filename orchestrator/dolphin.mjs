@@ -117,14 +117,21 @@ export function toFullWidth(code) {
     .join("");
 }
 
-function buildGeckoIni({ stageId, character, color }) {
-  // stageId === "random" uses the build whose lock-in asks the game for a
-  // random legal stage, rather than naming one.
-  const wantsRandom = stageId === "random" || stageId == null;
-  let autoDirect = wantsRandom ? GECKOS.autoDirectRandom : GECKOS.autoDirect;
-  if (!wantsRandom) {
+function buildGeckoIni({ stageId, character, color, stagePicker = true }) {
+  // Exactly ONE side of a match may pick the stage. It is the same role pair
+  // the game itself uses (ISWINNER / CHOSESTAGE), so when both clients claimed
+  // it, both believed they had lost game 1 and both drove the stage select for
+  // game 2 - it landed on Princess Peach's Castle and froze both machines.
+  // The follower takes the winner role and names no stage.
+  let autoDirect;
+  if (!stagePicker) {
+    autoDirect = GECKOS.autoDirectFollow;
+  } else if (stageId === "random" || stageId == null) {
+    // the build whose lock-in asks the game for a random legal stage
+    autoDirect = GECKOS.autoDirectRandom;
+  } else {
     const patched = `3860${(stageId & 0xff).toString(16).toUpperCase().padStart(4, "0")}`;
-    autoDirect = autoDirect.split(GECKOS.stageWordToken).join(patched);
+    autoDirect = GECKOS.autoDirect.split(GECKOS.stageWordToken).join(patched);
   }
   // Only Peppy's own patches ship. libmelee's "Extract Menu Info" gecko
   // (LGPL-3.0, altf4/Fizzi) was a development aid for reading game state; the
@@ -147,11 +154,18 @@ function buildGeckoIni({ stageId, character, color }) {
   return body + enabled;
 }
 
+/** Set `key = value` in a Dolphin ini, leaving the rest of the file alone. */
+function setIniValue(text, key, value) {
+  const line = new RegExp(`^${key}\\s*=.*$`, "mi");
+  return line.test(text) ? text.replace(line, `${key} = ${value}`) : text;
+}
+
 const LOG_REL = path.join("User", "Logs", "dolphin.log");
 
 // Everything a match launch needs. opponentCode is plain ASCII ("ABCD#123").
 export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
-                                   character, color = 0 }) {
+                                   character, color = 0, stagePicker = true,
+                                   windowMode = "maximized" }) {
   const user = path.join(SANDBOX, "User");
   for (const dir of ["Config", "GameSettings", "Slippi", "Logs"]) {
     fs.mkdirSync(path.join(user, dir), { recursive: true });
@@ -160,13 +174,16 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
   const realIni = path.join(SLIPPI_DIR, "netplay", "User", "Config", "Dolphin.ini");
   try {
     fs.copyFileSync(realIni, path.join(user, "Config", "Dolphin.ini"));
+    const ini = path.join(user, "Config", "Dolphin.ini");
+    let text = fs.readFileSync(ini, "utf8");
     // Peppy hides the window on purpose while it drives the menus, so this
     // setting would pause the emulator mid-launch and stall both sides.
-    const ini = path.join(user, "Config", "Dolphin.ini");
-    const text = fs.readFileSync(ini, "utf8");
-    if (/PauseOnFocusLost\s*=\s*True/i.test(text)) {
-      fs.writeFileSync(ini, text.replace(/PauseOnFocusLost\s*=\s*True/gi, "PauseOnFocusLost = False"));
-    }
+    text = text.replace(/PauseOnFocusLost\s*=\s*True/gi, "PauseOnFocusLost = False");
+    // Whether the game opens fullscreen is the player's choice in Peppy, not a
+    // leftover from however their own Dolphin happened to be set. Everything
+    // else - controller, video backend, delay - is still theirs.
+    text = setIniValue(text, "Fullscreen", windowMode === "fullscreen" ? "True" : "False");
+    fs.writeFileSync(ini, text);
   } catch { /* keep the copy we already have rather than refusing to play */ }
   // No GCPadNew: native adapter only. Peppy never uses virtual controllers.
   try {
@@ -185,8 +202,9 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
     if (fs.existsSync(log)) fs.rmSync(log);
   } catch { /* keep going: the log is only used to spot the connection */ }
 
+  lastWindowMode = windowMode;
   fs.writeFileSync(path.join(user, "GameSettings", "GALE01r2.ini"),
-    buildGeckoIni({ stageId, character, color }));
+    buildGeckoIni({ stageId, character, color, stagePicker }));
   fs.writeFileSync(path.join(user, "Slippi", "direct-codes.json"),
     JSON.stringify([{ connectCode: toFullWidth(opponentCode), lastPlayed: Math.floor(Date.now() / 1000) }]));
 }
@@ -265,6 +283,7 @@ function Get-Windows($target) {
 
 const SPLIT_LINES = /\s+/;
 
+let lastWindowMode = "maximized";  // how the player wants the game window
 let hider = null;              // the child that keeps windows hidden while booting
 let hiddenHandles = new Set(); // what we actually hid, so we can show it back
 
@@ -304,9 +323,13 @@ function stopHiding() {
  * window of Dolphin's that is still hidden and looks like the emulator or the
  * game, in case we launched one we never recorded.
  *
+ * The game window is maximised unless the player asked for something else -
+ * Dolphin otherwise opens at whatever small size its config remembers, and
+ * testers were double-clicking the title bar every match.
+ *
  * Returns how many of Dolphin's windows are visible afterwards.
  */
-function revealWindows(pid) {
+function revealWindows(pid, maximize = lastWindowMode === "maximized") {
   stopHiding();
   const csv = [...hiddenHandles].join(",");
   const script = `${WIN_HELPER}
@@ -320,8 +343,15 @@ foreach ($w in (Get-Windows ${pid})) {
     [void][PeppyWin]::ShowWindow([IntPtr]$w.H, 5)
   }
 }
+$game = @(Get-Windows ${pid} | Where-Object {
+  $_.Title -like '*Faster Melee*' -or $_.Title -like '*Slippi*' -or
+  $_.Title -like '*GALE01*' -or $_.Title -like '*Melee*' })
+if (${maximize ? "$true" : "$false"} -and $game.Count -gt 0) {
+  [void][PeppyWin]::ShowWindow([IntPtr]$game[0].H, 3)   # SW_MAXIMIZE
+}
 $shown = @(Get-Windows ${pid} | Where-Object { $_.Visible })
-if ($shown.Count -gt 0) { [void][PeppyWin]::SetForegroundWindow([IntPtr]$shown[0].H) }
+$front = if ($game.Count -gt 0) { $game[0].H } elseif ($shown.Count -gt 0) { $shown[0].H } else { 0 }
+if ($front -ne 0) { [void][PeppyWin]::SetForegroundWindow([IntPtr][int64]$front) }
 $shown.Count`;
   try {
     return Number(String(powershell(script)).trim()) || 0;
