@@ -18,6 +18,7 @@ public class T {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   delegate bool EnumProc(IntPtr h, IntPtr p);
@@ -27,7 +28,7 @@ public class T {
       uint id; GetWindowThreadProcessId(h, out id);
       if (id == target && IsWindowVisible(h) && GetWindowTextLength(h) > 0) {
         var t = new StringBuilder(256); GetWindowText(h, t, 256);
-        sb.Append(t.ToString() + ";");
+        sb.Append(t.ToString() + (IsZoomed(h) ? " [max]" : "") + ";");
       }
       return true;
     }, IntPtr.Zero);
@@ -82,6 +83,10 @@ async function run(renderToMain) {
   ok("the reveal reports success", res.ok === true);
   ok("the game window comes back", shown.length > 0);
   ok("nothing unrelated was shown", !shown.some((t) => /TAS Input|Configuration/i.test(t)));
+  // Dolphin otherwise opens at whatever small size its config remembers, and
+  // testers were double-clicking the title bar every match.
+  ok("the game window comes back maximized",
+    shown.some((t) => /melee|slippi|gale01/i.test(t) && t.includes("[max]")));
 
   d.killAll();
   await wait(1000);

@@ -75,7 +75,10 @@ let lastOpponent = null;   // who we just played, recorded when Melee closes
 function render() {
   $("myCode").value = backend.me.code;
   renderPeople($("friendsList"), backend.friends, (f) => btn("PLAY", () => startChallenge(f.code)));
-  renderPeople($("recentList"), backend.recent, (r) => btn("ADD FRIEND", () => addFriend(r)));
+  const isFriend = (code) => backend.friends.some((f) => f.code === code);
+  renderPeople($("recentList"), backend.recent,
+    (r) => (isFriend(r.code) ? btn("PLAY", () => startChallenge(r.code))
+                             : btn("ADD FRIEND", () => addFriend(r))));
 
   const inLists = myQueueState !== "out";
   $("queueLists").classList.toggle("hidden", !inLists);
@@ -83,7 +86,10 @@ function render() {
     p.state === "playing" && p.id && p.code !== backend.me.code
       ? btn(watchingId === p.id ? "STOP" : "WATCH", () => toggleWatch(p))
       : null;
-  renderPeople($("queueList"), backend.queue, watchAction);
+  // Someone who closed Peppy is not in the queue, whatever the row says: the
+  // server clears them on its next sweep, and until then they are not here.
+  const here = backend.queue.filter((p) => p.online !== false || p.code === backend.me.code);
+  renderPeople($("queueList"), here, watchAction);
   renderPeople($("spectateList"), backend.spectators, () => null);
   $("queueLists").classList.toggle("hidden", !inLists && !backend.queue.length);
   $("joinQueueBtn").textContent = myQueueState === "out" ? "JOIN QUEUE" : "LEAVE QUEUE";
@@ -171,6 +177,19 @@ function stageChoice() {
 
 function colorChoice() { return Number($("colorSel").value) || 0; }
 
+function windowChoice() { return $("windowSel").value || "maximized"; }
+
+// Exactly one side of a match picks the stage, or both machines fight over the
+// stage select after game 1. In the queue the server decides (the challenger -
+// the later arrival - picks). For a direct challenge it is whoever sent it, and
+// with no server to say who that was, the lower connect code takes it so both
+// ends still agree.
+function iPickTheStage(opponentCode) {
+  if (challenge?.iChallenged != null) return !!challenge.iChallenged;
+  if (pairing?.i_pick_stage != null) return !!pairing.i_pick_stage;
+  return backend.me.code < String(opponentCode || "");
+}
+
 // The costume list belongs to the character, so switching characters redraws it,
 // and a colour the new character doesn't have falls back to their default.
 function renderColors() {
@@ -244,7 +263,7 @@ function startChallenge(code) {
     alert("That doesn't look like a connect code (like ABCD#123).");
     return;
   }
-  challenge = { code, phase: "sent" };
+  challenge = { code, phase: "sent", iChallenged: true };
   showOverlay({ text: `Challenging ${code}…`, spinner: true, ready: false });
   backend.sendChallenge(code);
 }
@@ -280,6 +299,8 @@ backend.on(async (event) => {
           stageId: stageChoice(),
           character: $("charSel").value,
           color: colorChoice(),
+          stagePicker: iPickTheStage(event.code),
+          windowMode: windowChoice(),
         });
         if (!res.ok) {
           closeOverlay();
@@ -413,7 +434,7 @@ $("acceptBtn").addEventListener("click", async () => {
   const code = $("overlayText").textContent.match(/\(([A-Z]+#\d+)\)/)?.[1];
   incomingId = null;
   if (!res.ok) { closeOverlay(); alert("Couldn't accept:\n\n" + res.error); return; }
-  challenge = { code, phase: "accepted" };
+  challenge = { code, phase: "accepted", iChallenged: false };
   backend.confirmReady(code);          // accepting IS our ready
 });
 
@@ -519,6 +540,12 @@ net?.onPairingReady(async (p) => {
     stageId: stageChoice(),
     character: $("charSel").value,
     color: colorChoice(),
+    // the server says which of us is the challenger, and the challenger picks.
+    // Older servers don't send it, so fall back to a rule both ends agree on
+    // rather than leaving nobody - or everybody - holding the role.
+    stagePicker: p.i_pick_stage != null ? !!p.i_pick_stage
+                                        : backend.me.code < String(p.other_code || ""),
+    windowMode: windowChoice(),
   });
   if (!res.ok) { closeOverlay(); alert("Couldn't start the game:\n\n" + res.error); }
 });
@@ -627,6 +654,8 @@ window.addEventListener("unhandledrejection", (e) => {
     if (serverUp) net.heartbeat(sel.value, stageChoice() === "random" ? null : stageChoice());
   });
   $("stageSel").value = store.get("stage", "31");
+  $("windowSel").value = store.get("window", "maximized");
+  $("windowSel").addEventListener("change", () => store.set("window", $("windowSel").value));
   $("colorSel").value = store.get("color", "0");
   renderColors();
   $("stageSel").addEventListener("change", () => {
