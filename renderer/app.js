@@ -171,6 +171,37 @@ function stageChoice() {
 
 function colorChoice() { return Number($("colorSel").value) || 0; }
 
+// The costume list belongs to the character, so switching characters redraws it,
+// and a colour the new character doesn't have falls back to their default.
+function renderColors() {
+  const list = window.costumesFor($("charSel").value);
+  const field = $("colorSel");
+  let picked = Number(field.value) || 0;
+  if (picked >= list.length) picked = 0;
+  field.value = String(picked);
+  store.set("color", field.value);
+  const row = $("colorRow");
+  row.innerHTML = "";
+  list.forEach(([name, hex], i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "swatch" + (i === picked ? " on" : "");
+    b.title = name;
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.style.background = hex;
+    const label = document.createElement("span");
+    label.className = "cname";
+    label.textContent = name;
+    b.append(chip, label);
+    b.addEventListener("click", () => {
+      field.value = String(i);
+      renderColors();
+    });
+    row.appendChild(b);
+  });
+}
+
 function btn(label, onClick) {
   const b = document.createElement("button");
   b.textContent = label;
@@ -574,11 +605,12 @@ window.addEventListener("unhandledrejection", (e) => {
   sel.value = store.get("character", "FOX");
   sel.addEventListener("change", () => {
     store.set("character", sel.value);
+    renderColors();
     if (serverUp) net.heartbeat(sel.value, stageChoice() === "random" ? null : stageChoice());
   });
   $("stageSel").value = store.get("stage", "31");
   $("colorSel").value = store.get("color", "0");
-  $("colorSel").addEventListener("change", () => store.set("color", $("colorSel").value));
+  renderColors();
   $("stageSel").addEventListener("change", () => {
     store.set("stage", $("stageSel").value);
     if (serverUp) net.heartbeat(sel.value, stageChoice() === "random" ? null : stageChoice());

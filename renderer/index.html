@@ -36,19 +36,13 @@
       </label>
     </div>
     <div class="row">
-      <label>Color
-        <select id="colorSel">
-          <option value="0">Default</option>
-          <option value="1">Color 2</option>
-          <option value="2">Color 3</option>
-          <option value="3">Color 4</option>
-          <option value="4">Color 5</option>
-          <option value="5">Color 6</option>
-        </select>
+      <label class="stack">Color
+        <div id="colorRow" class="swatches"></div>
+        <input type="hidden" id="colorSel" value="0" />
       </label>
     </div>
     <div class="hint">Peppy picks these for you in-game — you just play.
-      Not every character has six costumes; unused ones fall back to the default.</div>
+      The colors are your character's real costumes, so the list changes when you switch.</div>
   </section>
 
   <!-- Direct match -->
@@ -107,6 +101,7 @@
 
 <footer id="statusbar">starting…</footer>
 
+<script src="costumes.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

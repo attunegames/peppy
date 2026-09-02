@@ -50,3 +50,24 @@ d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: 0x1F, character: "FOX",
 const ini3 = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
 ok("a named stage still works alongside colour", ini3.includes("3860001F"));
 ok("colour 0 is the default", ini3.includes("3BE00000"));
+
+// --- costume table: every character the picker can offer has real colours ---
+{
+  const geckos = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8"));
+  const src = fs.readFileSync("./renderer/costumes.js", "utf8");
+  const win = {};
+  new Function("window", src)(win);
+  const names = Object.keys(geckos.characters);
+  ok("every character has a costume list",
+    names.every((n) => Array.isArray(win.COSTUMES[n]) && win.COSTUMES[n].length >= 2));
+  ok("no costume list exceeds the game's six",
+    Object.values(win.COSTUMES).every((l) => l.length <= 6));
+  ok("every costume has a name and a swatch",
+    Object.values(win.COSTUMES).flat().every(([name, hex]) =>
+      typeof name === "string" && name.length > 0 && /^#[0-9a-f]{6}$/.test(hex)));
+  ok("costumes are named, not numbered",
+    !Object.values(win.COSTUMES).flat().some(([name]) => /^Color\s*\d/i.test(name)));
+  ok("an unknown character still gets a picker", win.costumesFor("NOBODY").length === 1);
+  ok("Marth's four alts are the real ones",
+    win.COSTUMES.MARTH.map(([n]) => n).join(",") === "Blue,Red,Green,Black,White");
+}
