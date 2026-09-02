@@ -117,9 +117,12 @@ export function toFullWidth(code) {
     .join("");
 }
 
-function buildGeckoIni({ stageId, character }) {
-  let autoDirect = GECKOS.autoDirect;
-  if (stageId != null) {
+function buildGeckoIni({ stageId, character, color }) {
+  // stageId === "random" uses the build whose lock-in asks the game for a
+  // random legal stage, rather than naming one.
+  const wantsRandom = stageId === "random" || stageId == null;
+  let autoDirect = wantsRandom ? GECKOS.autoDirectRandom : GECKOS.autoDirect;
+  if (!wantsRandom) {
     const patched = `3860${(stageId & 0xff).toString(16).toUpperCase().padStart(4, "0")}`;
     autoDirect = autoDirect.split(GECKOS.stageWordToken).join(patched);
   }
@@ -129,8 +132,14 @@ function buildGeckoIni({ stageId, character }) {
   let body = "[Gecko]\n$AutoDirect [peppy]\n" + autoDirect +
     "\n$AutoBoot [peppy]\n" + GECKOS.autoBoot;
   let enabled = "\n\n[Gecko_Enabled]\n$AutoDirect\n$AutoBoot\n";
-  const pick = character && GECKOS.charPick[character.toUpperCase()];
+  let pick = character && GECKOS.charPick[character.toUpperCase()];
   if (pick) {
+    // Costume: Slippi disables the in-game colour buttons on the online
+    // character select, so the choice is written straight into the selection
+    // that the lock-in reads.
+    const n = Math.max(0, Math.min(5, Number(color) || 0));
+    pick = pick.split(GECKOS.colorToken)
+      .join(`3BE000${n.toString(16).toUpperCase().padStart(2, "0")}`);
     body += "\n$CharPick [peppy]\n" + pick +
       "\n$CharPress [peppy]\n" + GECKOS.charPress;
     enabled += "$CharPick\n$CharPress\n";
@@ -141,7 +150,8 @@ function buildGeckoIni({ stageId, character }) {
 const LOG_REL = path.join("User", "Logs", "dolphin.log");
 
 // Everything a match launch needs. opponentCode is plain ASCII ("ABCD#123").
-export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD, character }) {
+export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
+                                   character, color = 0 }) {
   const user = path.join(SANDBOX, "User");
   for (const dir of ["Config", "GameSettings", "Slippi", "Logs"]) {
     fs.mkdirSync(path.join(user, dir), { recursive: true });
@@ -169,7 +179,7 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD, 
   } catch { /* keep going: the log is only used to spot the connection */ }
 
   fs.writeFileSync(path.join(user, "GameSettings", "GALE01r2.ini"),
-    buildGeckoIni({ stageId, character }));
+    buildGeckoIni({ stageId, character, color }));
   fs.writeFileSync(path.join(user, "Slippi", "direct-codes.json"),
     JSON.stringify([{ connectCode: toFullWidth(opponentCode), lastPlayed: Math.floor(Date.now() / 1000) }]));
 }

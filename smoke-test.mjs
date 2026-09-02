@@ -38,3 +38,15 @@ const real = path.join(process.env.APPDATA, "Slippi Launcher", "netplay", "User"
 ok("real Slippi install untouched (no peppy patches there)",
   !fs.existsSync(path.join(real, "GALE01r2.ini")) ||
   !fs.readFileSync(path.join(real, "GALE01r2.ini"), "utf8").includes("peppy"));
+
+// --- random stage + colour ---
+d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: "random", character: "FOX", color: 3 });
+const ini2 = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+ok("random stage uses the game's own random option", !ini2.includes("3860001F") && !ini2.includes("3860001C"));
+ok("colour 3 written into the pick", ini2.includes("3BE00003"));
+ok("colour placeholder is gone", !ini2.includes("3BE0005B"));
+
+d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: 0x1F, character: "FOX", color: 0 });
+const ini3 = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+ok("a named stage still works alongside colour", ini3.includes("3860001F"));
+ok("colour 0 is the default", ini3.includes("3BE00000"));

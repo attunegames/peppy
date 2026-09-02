@@ -54,7 +54,7 @@ const backend = {
   async sendChallenge(code) {
     this.emit({ type: "challenge-sent", code });
     if (serverUp) {
-      const res = await net.challenge(code, Number($("stageSel").value));
+      const res = await net.challenge(code, stageChoice());
       if (!res.ok) { this.emit({ type: "challenge-failed", error: res.error }); return; }
       return; // the poll loop reports when they accept
     }
@@ -162,6 +162,15 @@ function renderPeople(ul, items, actionFor) {
   }
 }
 
+// "random" is passed through as-is; the server only stores a number, so a
+// random choice is recorded as no preference.
+function stageChoice() {
+  const v = $("stageSel").value;
+  return v === "random" ? "random" : Number(v);
+}
+
+function colorChoice() { return Number($("colorSel").value) || 0; }
+
 function btn(label, onClick) {
   const b = document.createElement("button");
   b.textContent = label;
@@ -237,8 +246,9 @@ backend.on(async (event) => {
       {
         const res = await bridge.launchMatch({
           opponentCode: event.code,
-          stageId: Number($("stageSel").value),
+          stageId: stageChoice(),
           character: $("charSel").value,
+          color: colorChoice(),
         });
         if (!res.ok) {
           closeOverlay();
@@ -457,8 +467,9 @@ net?.onPairingReady(async (p) => {
   if (!bridge) return;
   const res = await bridge.launchMatch({
     opponentCode: p.other_code,
-    stageId: Number($("stageSel").value),
+    stageId: stageChoice(),
     character: $("charSel").value,
+    color: colorChoice(),
   });
   if (!res.ok) { closeOverlay(); alert("Couldn't start the game:\n\n" + res.error); }
 });
@@ -563,12 +574,14 @@ window.addEventListener("unhandledrejection", (e) => {
   sel.value = store.get("character", "FOX");
   sel.addEventListener("change", () => {
     store.set("character", sel.value);
-    if (serverUp) net.heartbeat(sel.value, Number($("stageSel").value));
+    if (serverUp) net.heartbeat(sel.value, stageChoice() === "random" ? null : stageChoice());
   });
   $("stageSel").value = store.get("stage", "31");
+  $("colorSel").value = store.get("color", "0");
+  $("colorSel").addEventListener("change", () => store.set("color", $("colorSel").value));
   $("stageSel").addEventListener("change", () => {
     store.set("stage", $("stageSel").value);
-    if (serverUp) net.heartbeat(sel.value, Number($("stageSel").value));
+    if (serverUp) net.heartbeat(sel.value, stageChoice() === "random" ? null : stageChoice());
   });
   $("statusbar").textContent = status;
   render();

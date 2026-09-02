@@ -72,7 +72,7 @@ ipcMain.handle("slippi-info", async () => {
 });
 
 // Launch a direct match: hidden Dolphin, revealed once actually connected.
-ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character }) => {
+ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, color }) => {
   const d = await orchestrator();
   try {
     // Close any Dolphin still running FIRST: on Windows a live process holds
@@ -80,7 +80,7 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character })
     d.killAll();
     await new Promise((r) => setTimeout(r, 400));
     const { isoPath } = d.ensureSandbox();
-    d.writeMatchConfigs({ opponentCode, stageId, character });
+    d.writeMatchConfigs({ opponentCode, stageId, character, color });
     const pid = d.launch({ isoPath });
     // remember what this match was, so the result can be read afterwards
     matchContext = { opponentCode, startedAt: Date.now() };
