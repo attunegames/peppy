@@ -71,3 +71,14 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("Marth's four alts are the real ones",
     win.COSTUMES.MARTH.map(([n]) => n).join(",") === "Blue,Red,Green,Black,White");
 }
+
+// A <label> forwards clicks to the first button inside it, so wrapping the
+// swatches in one made every click re-pick the first colour (v0.5.1 bug).
+{
+  const html = fs.readFileSync("./renderer/index.html", "utf8")
+    .replace(/<!--[\s\S]*?-->/g, "");   // comments mention <label> on purpose
+  const before = html.slice(0, html.indexOf('id="colorRow"'));
+  const lastLabel = before.lastIndexOf("<label");
+  ok("the colour swatches are not wrapped in a <label>",
+    lastLabel === -1 || before.slice(lastLabel).includes("</label>"));
+}

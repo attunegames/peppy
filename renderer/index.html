@@ -36,10 +36,12 @@
       </label>
     </div>
     <div class="row">
-      <label class="stack">Color
+      <!-- Not a <label>: a label forwards clicks to the first button inside it,
+           which would re-pick the first colour every time you clicked another. -->
+      <div class="field stack"><span class="field-name">Color</span>
         <div id="colorRow" class="swatches"></div>
         <input type="hidden" id="colorSel" value="0" />
-      </label>
+      </div>
     </div>
     <div class="hint">Peppy picks these for you in-game — you just play.
       The colors are your character's real costumes, so the list changes when you switch.</div>
