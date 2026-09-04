@@ -18,7 +18,8 @@ public class T {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr p);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
-  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   delegate bool EnumProc(IntPtr h, IntPtr p);
@@ -28,7 +29,8 @@ public class T {
       uint id; GetWindowThreadProcessId(h, out id);
       if (id == target && IsWindowVisible(h) && GetWindowTextLength(h) > 0) {
         var t = new StringBuilder(256); GetWindowText(h, t, 256);
-        sb.Append(t.ToString() + (IsZoomed(h) ? " [max]" : "") + ";");
+        RECT r; GetWindowRect(h, out r);
+        sb.Append(t.ToString() + "|" + (r.R - r.L) + "x" + (r.B - r.T) + ";");
       }
       return true;
     }, IntPtr.Zero);
@@ -48,10 +50,10 @@ const iniPath = path.join(process.env.APPDATA, "Peppy", "netplay", "User", "Conf
 // Two setups matter: the render window separate (RenderToMain = False), and the
 // game drawn inside the main window (True) - the second is what left a tester
 // with audio and no window, because a hidden window has no MainWindowHandle.
-async function run(renderToMain) {
+async function run(renderToMain, windowMode = "maximized") {
   console.log(`
---- RenderToMain = ${renderToMain} ---`);
-  d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: 31, character: "FOX", color: 0 });
+--- RenderToMain = ${renderToMain}, window = ${windowMode} ---`);
+  d.writeMatchConfigs({ opponentCode: "TEST#001", stageId: 31, character: "FOX", color: 0, windowMode });
   const ini = fs.readFileSync(iniPath, "utf8");
   fs.writeFileSync(iniPath, ini.replace(/RenderToMain\s*=\s*\w+/i, `RenderToMain = ${renderToMain}`));
   const pid = d.launch({ isoPath });
@@ -84,13 +86,29 @@ async function run(renderToMain) {
   ok("the game window comes back", shown.length > 0);
   ok("nothing unrelated was shown", !shown.some((t) => /TAS Input|Configuration/i.test(t)));
   // Dolphin otherwise opens at whatever small size its config remembers, and
-  // testers were double-clicking the title bar every match.
-  ok("the game window comes back maximized",
-    shown.some((t) => /melee|slippi|gale01/i.test(t) && t.includes("[max]")));
+  // testers were double-clicking the title bar every match. The size comes
+  // from Dolphin's own render-window config - maximising by title picked the
+  // WRONG window, so the game stayed small and the game list filled the screen.
+  const work = Number(execFileSync("powershell",
+    ["-NoProfile", "-NonInteractive", "-Command",
+     "Add-Type -AssemblyName System.Windows.Forms; " +
+     "[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width"],
+    { encoding: "utf8" }).trim());
+  const widths = shown.map((t) => Number(t.split("|")[1]?.split("x")[0] || 0));
+  if (windowMode === "maximized") {
+    ok("the game window fills the screen", widths.some((w) => w >= work * 0.9));
+  }
 
+  // The relaunch guard asks this before refusing to start a match. When it
+  // could not, a match whose end went unnoticed wedged every later launch.
+  ok("a running match reports as running", d.isRunning() === true);
   d.killAll();
-  await wait(1000);
+  await wait(1500);
+  ok("a finished match does not", d.isRunning() === false);
+  await wait(500);
 }
 
-await run("False");
-await run("True");
+// "However Dolphin is set" leaves RenderToMain alone; "maximized" forces a
+// separate render window, because that is the one Peppy can size.
+await run("False", "maximized");
+await run("True", "normal");

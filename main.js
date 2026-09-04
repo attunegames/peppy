@@ -86,9 +86,11 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
   const d = await orchestrator();
   try {
     // Never restart a match that is already running: relaunching kills the
-    // Dolphin the player is sitting in. matchContext clears itself when Melee
-    // exits, so a genuine retry still works.
-    if (matchContext && matchContext.opponentCode === opponentCode) {
+    // Dolphin the player is sitting in. It has to be a LIVE match, though -
+    // when this only checked matchContext, a match whose end went unnoticed
+    // wedged every later launch on "setting up your match" until Peppy was
+    // restarted.
+    if (matchContext && matchContext.opponentCode === opponentCode && d.isRunning()) {
       console.log("[match] already running vs", opponentCode, "- ignoring relaunch");
       return { ok: true, alreadyRunning: true };
     }

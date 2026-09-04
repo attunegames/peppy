@@ -139,22 +139,35 @@ function buildGeckoIni({ stageId, character, color, stagePicker = true }) {
   let body = "[Gecko]\n$AutoDirect [peppy]\n" + autoDirect +
     "\n$AutoBoot [peppy]\n" + GECKOS.autoBoot;
   let enabled = "\n\n[Gecko_Enabled]\n$AutoDirect\n$AutoBoot\n";
-  const who = character && character.toUpperCase();
-  const pick = who && GECKOS.charPick[who];
-  let press = who && GECKOS.charPress[who];
-  if (pick && press) {
-    // Costume: Peppy presses X to cycle to it, the way a player would, so the
-    // game sets the colour through its own path and it survives into game 2.
-    // A value this character does not have means no X press at all (the
-    // payload checks), so clamping here is about sending something sane.
-    const n = Math.max(0, Math.min((GECKOS.costumes?.[who] ?? 6) - 1, Number(color) || 0));
-    press = press.split(GECKOS.colorToken)
+  let pick = character && GECKOS.charPick[character.toUpperCase()];
+  if (pick) {
+    // Costume: written straight into the selection that the lock-in reads.
+    // Pressing X for it instead (v0.8.x) set nothing - the press code bails
+    // out the moment a character is chosen, which is exactly when the costume
+    // would need cycling, and their replays came back costume 0 every game.
+    const n = Math.max(0, Math.min(5, Number(color) || 0));
+    pick = pick.split(GECKOS.colorToken)
       .join(`3BE000${n.toString(16).toUpperCase().padStart(2, "0")}`);
     body += "\n$CharPick [peppy]\n" + pick +
-      "\n$CharPress [peppy]\n" + press;
+      "\n$CharPress [peppy]\n" + GECKOS.charPress;
     enabled += "$CharPick\n$CharPress\n";
   }
   return body + enabled;
+}
+
+/** The usable desktop, so the game can fill it without covering the taskbar. */
+let cachedScreen = null;
+function screenSize() {
+  if (cachedScreen) return cachedScreen;
+  try {
+    const out = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command",
+      "Add-Type -AssemblyName System.Windows.Forms; " +
+      "$a = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; \"$($a.Width)x$($a.Height)\""],
+      { encoding: "utf8", timeout: 10000 }).trim();
+    const [w, h] = out.split("x").map(Number);
+    if (w > 200 && h > 200) cachedScreen = { width: w, height: h };
+  } catch { /* fall through to something sane */ }
+  return (cachedScreen ??= { width: 1600, height: 900 });
 }
 
 /** Set `key = value` in a Dolphin ini, leaving the rest of the file alone. */
@@ -186,8 +199,40 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
     // leftover from however their own Dolphin happened to be set. Everything
     // else - controller, video backend, delay - is still theirs.
     text = setIniValue(text, "Fullscreen", windowMode === "fullscreen" ? "True" : "False");
+    // "Maximized" is Dolphin's own render-window size, not a ShowWindow call.
+    // Maximising by hand picked the wrong window - Dolphin's main window is
+    // the one titled "Faster Melee - Slippi", so the game stayed small and the
+    // game-list window filled the screen.
+    if (windowMode === "maximized") {
+      const { width, height } = screenSize();
+      // The size below belongs to the render window, so the game has to have
+      // one: with RenderToMain the game draws inside the small game-list
+      // window and none of this applies. "However Dolphin is set" leaves the
+      // player's own choice alone.
+      text = setIniValue(text, "RenderToMain", "False");
+      text = setIniValue(text, "RenderWindowAutoSize", "False");
+      text = setIniValue(text, "RenderWindowXPos", "0");
+      text = setIniValue(text, "RenderWindowYPos", "0");
+      text = setIniValue(text, "RenderWindowWidth", String(width));
+      text = setIniValue(text, "RenderWindowHeight", String(height));
+    }
     fs.writeFileSync(ini, text);
   } catch { /* keep the copy we already have rather than refusing to play */ }
+  // Mirror their graphics settings too, and make fullscreen BORDERLESS: an
+  // exclusive-fullscreen Dolphin that Peppy hid and showed again could be
+  // heard but never tabbed back into.
+  try {
+    const realGfx = path.join(SLIPPI_DIR, "netplay", "User", "Config", "GFX.ini");
+    const gfx = path.join(user, "Config", "GFX.ini");
+    if (fs.existsSync(realGfx)) fs.copyFileSync(realGfx, gfx);
+    let text = fs.existsSync(gfx) ? fs.readFileSync(gfx, "utf8") : "[Settings]\n";
+    if (!/^\[Settings\]/m.test(text)) text += "\n[Settings]\n";
+    text = /^BorderlessFullscreen\s*=/mi.test(text)
+      ? setIniValue(text, "BorderlessFullscreen", "True")
+      : text.replace(/^\[Settings\][^\n]*$/mi, "[Settings]\nBorderlessFullscreen = True");
+    fs.writeFileSync(gfx, text);
+  } catch { /* graphics settings are a nicety, never a reason not to play */ }
+
   // No GCPadNew: native adapter only. Peppy never uses virtual controllers.
   try {
     const gcpad = path.join(user, "Config", "GCPadNew.ini");
@@ -205,7 +250,6 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
     if (fs.existsSync(log)) fs.rmSync(log);
   } catch { /* keep going: the log is only used to spot the connection */ }
 
-  lastWindowMode = windowMode;
   fs.writeFileSync(path.join(user, "GameSettings", "GALE01r2.ini"),
     buildGeckoIni({ stageId, character, color, stagePicker }));
   fs.writeFileSync(path.join(user, "Slippi", "direct-codes.json"),
@@ -218,10 +262,24 @@ let watchTimer = null;
 export function launch({ isoPath }) {
   killAll();
   const exe = path.join(SANDBOX, "Slippi Dolphin.exe");
-  dolphinProc = spawn(exe, ["-e", isoPath, "-u", path.join(SANDBOX, "User")], {
+  // -b (batch) makes Dolphin exit when emulation stops. Without it, closing
+  // the game left the emulator window up, Peppy never saw the match end, the
+  // queue kept showing you as playing, and the next match refused to launch.
+  dolphinProc = spawn(exe, ["-b", "-e", isoPath, "-u", path.join(SANDBOX, "User")], {
     stdio: "ignore",
   });
   return dolphinProc.pid;
+}
+
+/** Is a match actually running right now? */
+export function isRunning() {
+  if (!dolphinProc?.pid) return false;
+  try {
+    process.kill(dolphinProc.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function killAll() {
@@ -286,7 +344,6 @@ function Get-Windows($target) {
 
 const SPLIT_LINES = /\s+/;
 
-let lastWindowMode = "maximized";  // how the player wants the game window
 let hider = null;              // the child that keeps windows hidden while booting
 let hiddenHandles = new Set(); // what we actually hid, so we can show it back
 
@@ -326,13 +383,11 @@ function stopHiding() {
  * window of Dolphin's that is still hidden and looks like the emulator or the
  * game, in case we launched one we never recorded.
  *
- * The game window is maximised unless the player asked for something else -
- * Dolphin otherwise opens at whatever small size its config remembers, and
- * testers were double-clicking the title bar every match.
- *
- * Returns how many of Dolphin's windows are visible afterwards.
+ * Returns how many of Dolphin's windows are visible afterwards. How big the
+ * game window is comes from Dolphin's own config (see writeMatchConfigs), not
+ * from here - picking a window to maximise by title chose the wrong one.
  */
-function revealWindows(pid, maximize = lastWindowMode === "maximized") {
+function revealWindows(pid) {
   stopHiding();
   const csv = [...hiddenHandles].join(",");
   const script = `${WIN_HELPER}
@@ -346,15 +401,8 @@ foreach ($w in (Get-Windows ${pid})) {
     [void][PeppyWin]::ShowWindow([IntPtr]$w.H, 5)
   }
 }
-$game = @(Get-Windows ${pid} | Where-Object {
-  $_.Title -like '*Faster Melee*' -or $_.Title -like '*Slippi*' -or
-  $_.Title -like '*GALE01*' -or $_.Title -like '*Melee*' })
-if (${maximize ? "$true" : "$false"} -and $game.Count -gt 0) {
-  [void][PeppyWin]::ShowWindow([IntPtr]$game[0].H, 3)   # SW_MAXIMIZE
-}
 $shown = @(Get-Windows ${pid} | Where-Object { $_.Visible })
-$front = if ($game.Count -gt 0) { $game[0].H } elseif ($shown.Count -gt 0) { $shown[0].H } else { 0 }
-if ($front -ne 0) { [void][PeppyWin]::SetForegroundWindow([IntPtr][int64]$front) }
+if ($shown.Count -gt 0) { [void][PeppyWin]::SetForegroundWindow([IntPtr]$shown[0].H) }
 $shown.Count`;
   try {
     return Number(String(powershell(script)).trim()) || 0;
