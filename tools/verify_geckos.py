@@ -19,7 +19,10 @@ cmp("autoDirect", g.assemble(stage_picker=True), ref["autoDirect"])
 cmp("autoDirectRandom", g.assemble(stage_picker=True, random_stage=True),
     ref["autoDirectRandom"])
 cmp("autoDirectFollow", g.assemble(stage_picker=False), ref["autoDirectFollow"])
-cmp("charPress", g.assemble_charpress(), ref["charPress"])
+COUNTS = g.costume_counts()
+for name in sorted(ref["charPress"]):
+    cmp(f"charPress[{name}]", g.assemble_charpress(name, COUNTS[name]),
+        ref["charPress"][name])
 for name in sorted(ref["charPick"]):
     cmp(f"charPick[{name}]", g.assemble_charpick(name), ref["charPick"][name])
 print(f"\n{len(fails)} mismatch(es)" if fails else "\nall payloads reproduce exactly")
