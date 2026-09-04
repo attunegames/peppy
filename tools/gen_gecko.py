@@ -264,10 +264,11 @@ def build_autodirect_asm(stage_id, stage_picker, random_stage=False):
     second START press once the opponent appears; without this both clients sit
     connected forever.
 
-    After the last of those the code retires itself and clears CHOSESTAGE. That
-    byte is how the game knows whether a stage was already picked, and leaving
-    Peppy's game-1 answer standing meant game 2 never reached the stage select -
-    the scene got a random stage instead of the loser picking.
+    After the last of those the code retires itself, and it also retires the
+    moment a game has been and gone (the same frame-gap test the character
+    codes use). Once two players are connected, Peppy writes nothing: no roles,
+    no lock-in, no stage. Clearing CHOSESTAGE on the way out was tried and
+    crashed the other client at the stage select.
     """
     return f"""
 stwu 1, -0x90(1)
@@ -287,11 +288,32 @@ bl AFTER_DATA
 DATA:
 nop
 nop
+nop
 AFTER_DATA:
 mflr 30
 lwz 29, 0(30)
 cmpwi 29, 2
 beq EXIT
+
+lis 3, 0x8048
+lwz 3, -0x62A0(3)
+lwz 4, 8(30)
+lis 5, 0x6000
+cmpw 4, 5
+beq AD_MARK
+cmpw 3, 4
+blt AD_RETIRE
+subf 5, 4, 3
+cmpwi 5, 120
+bgt AD_RETIRE
+AD_MARK:
+stw 3, 8(30)
+b AD_GO
+AD_RETIRE:
+li 3, 2
+stw 3, 0(30)
+b EXIT
+AD_GO:
 
 lis 3, 0x8000
 ori 3, 3, 0x5614
@@ -361,8 +383,6 @@ cmpwi 27, 420
 bne EXIT
 li 3, 2
 stw 3, 0(30)
-li 3, 0
-stb 3, -0x5036(13)
 
 EXIT:
 lmw 25, 0x20(1)

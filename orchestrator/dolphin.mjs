@@ -284,13 +284,38 @@ export function isRunning() {
   }
 }
 
+/**
+ * Close every Dolphin, including one the player started from the Slippi
+ * Launcher themselves, and wait for it to actually be gone. A match cannot
+ * start while another Dolphin holds the config and log files open, and
+ * accepting a challenge with Dolphin already open used to look like nothing
+ * happening at all.
+ */
 export function killAll() {
   if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
   stopHiding();
-  try {
-    execFileSync("taskkill", ["/F", "/IM", "Slippi Dolphin.exe"], { stdio: "ignore" });
-  } catch { /* nothing running */ }
+  for (const name of ["Slippi Dolphin.exe", "Dolphin.exe"]) {
+    try {
+      execFileSync("taskkill", ["/F", "/IM", name], { stdio: "ignore" });
+    } catch { /* that one was not running */ }
+  }
+  // taskkill returns before Windows has finished tearing the process down.
+  for (let i = 0; i < 20 && dolphinIsUp(); i++) sleepSync(150);
   dolphinProc = null;
+}
+
+function dolphinIsUp() {
+  try {
+    const out = execFileSync("tasklist", ["/FI", "IMAGENAME eq Slippi Dolphin.exe"],
+      { encoding: "utf8", timeout: 5000 });
+    return out.includes("Slippi Dolphin.exe");
+  } catch {
+    return false;
+  }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 // --- window visibility -----------------------------------------------------
