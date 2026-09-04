@@ -10,6 +10,7 @@ import gen_gecko as g
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+COUNTS = g.costume_counts()
 auto_direct = g.assemble(stage_picker=True)
 # The lock-in is emitted twice (initial + post-connect re-lock), so the stage
 # word appears twice and the app must patch every occurrence.
@@ -31,8 +32,9 @@ out = {
         "autoBoot: skip the online mode-select into the Direct CSS. "
         "autoDirect: auto code-entry + search + game-1 stage lock-in; patch "
         "stageWordToken -> 386000XX to change the stage (all occurrences). "
-        "charPick[NAME] + charPress together select a character with no human "
-        "input. autoDirectFollow is the same as autoDirect but takes the "
+        "charPick[NAME] parks the cursor; charPress[NAME] cycles the costume "
+        "with X and then presses A - in that order, because the press code "
+        "stops once a character is chosen. autoDirectFollow is the same as autoDirect but takes the "
         "winner role and chooses no stage - exactly one side of a match may "
         "pick. Verify with tools/verify_geckos.py."
     ),
@@ -45,7 +47,11 @@ out = {
     "stageWordToken": "3860001F",
     "stageWordCount": stage_hits,
     "colorToken": "3BE0005B",             # li r31, 0x5B -> patched per match
-    "charPress": g.assemble_charpress(),
+    # charPress is per character: it waits for the cursor, cycles the costume
+    # with X, then presses A - and it needs to know how many costumes exist.
+    "charPress": {name: g.assemble_charpress(name, COUNTS[name])
+                  for name in sorted(g.CHAR_TABLE)},
+    "costumes": {name: COUNTS[name] for name in sorted(g.CHAR_TABLE)},
     "charPick": {name: g.assemble_charpick(name) for name in sorted(g.CHAR_TABLE)},
     "characters": {name: {"ckind": v[0], "x": v[1], "y": v[2]}
                    for name, v in sorted(g.CHAR_TABLE.items())},

@@ -192,21 +192,35 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
 
 }
 
-// --- the costume is written, and it is written for every game ---
-// Pressing X for it (v0.8.x) set nothing: the press code exits as soon as a
-// character is chosen, which is exactly when the costume needs cycling. Their
-// replays came back costume 0 in every game.
+// --- the costume is pressed for, in the right order ---
+// X while hovering, THEN A. The press code stops the moment a character is
+// chosen, so an X press after the A press never happens - v0.8.x had that
+// order backwards and every replay came back costume 0.
 {
   const geckos = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8"));
-  ok("the costume lives with the cursor code, which keeps running",
-    geckos.charPick.FOX.includes("3BE0005B"));
-  ok("there is one press payload, and it only presses A",
-    typeof geckos.charPress === "string" && geckos.charPress.includes("3B200100") === false);
+  ok("there is a press payload per character",
+    Object.keys(geckos.charPress).length === Object.keys(geckos.charPick).length);
+  ok("the costume lives in the press, not the cursor",
+    geckos.charPress.FOX.includes("3BE0005B") && !geckos.charPick.FOX.includes("3BE0005B"));
+  ok("the press knows each character's costume count",
+    geckos.costumes.FOX === 4 && geckos.costumes.MARTH === 5 && geckos.costumes.KIRBY === 6);
+  // 0x400 = X, 0x100 = A, 0x500 = both (cleared between presses), and the
+  // press count lives in a data word that starts as a nop (3F606000 tests it).
+  for (const [what, word] of [["X", "3B200400"], ["A", "3B200100"], ["a press count", "3F606000"]]) {
+    ok(`${what} is in the payload`, geckos.charPress.FOX.includes(word));
+  }
+  ok("X comes before A",
+    geckos.charPress.FOX.indexOf("3B200400") < geckos.charPress.FOX.indexOf("3B200100"));
 
   d.writeMatchConfigs({ opponentCode: "TEST#001", character: "KIRBY", color: 5 });
   const ini = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
   ok("Kirby's sixth costume is asked for", ini.includes("3BE00005"));
   ok("the costume placeholder is gone", !ini.includes("3BE0005B"));
+
+  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "MARTH", color: 5 });
+  const marth = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+  ok("a colour a character does not have is clamped",
+    marth.includes("3BE00004") && !marth.includes("3BE00005"));
 }
 
 // --- friendlies play the stage the game normally plays ---

@@ -139,17 +139,19 @@ function buildGeckoIni({ stageId, character, color, stagePicker = true }) {
   let body = "[Gecko]\n$AutoDirect [peppy]\n" + autoDirect +
     "\n$AutoBoot [peppy]\n" + GECKOS.autoBoot;
   let enabled = "\n\n[Gecko_Enabled]\n$AutoDirect\n$AutoBoot\n";
-  let pick = character && GECKOS.charPick[character.toUpperCase()];
-  if (pick) {
-    // Costume: written straight into the selection that the lock-in reads.
-    // Pressing X for it instead (v0.8.x) set nothing - the press code bails
-    // out the moment a character is chosen, which is exactly when the costume
-    // would need cycling, and their replays came back costume 0 every game.
-    const n = Math.max(0, Math.min(5, Number(color) || 0));
-    pick = pick.split(GECKOS.colorToken)
+  const who = character && character.toUpperCase();
+  const pick = who && GECKOS.charPick[who];
+  let press = who && GECKOS.charPress[who];
+  if (pick && press) {
+    // Costume: X presses while the cursor hovers, before A chooses. That order
+    // matters - the press code stops the moment a character is chosen, so an X
+    // press after the A press never happens, which is why v0.8.x came back
+    // costume 0 in every replay.
+    const n = Math.max(0, Math.min((GECKOS.costumes?.[who] ?? 6) - 1, Number(color) || 0));
+    press = press.split(GECKOS.colorToken)
       .join(`3BE000${n.toString(16).toUpperCase().padStart(2, "0")}`);
     body += "\n$CharPick [peppy]\n" + pick +
-      "\n$CharPress [peppy]\n" + GECKOS.charPress;
+      "\n$CharPress [peppy]\n" + press;
     enabled += "$CharPick\n$CharPress\n";
   }
   return body + enabled;
