@@ -201,6 +201,9 @@ export function writeMatchConfigs({ opponentCode, stageId = STAGES.BATTLEFIELD,
     // leftover from however their own Dolphin happened to be set. Everything
     // else - controller, video backend, delay - is still theirs.
     text = setIniValue(text, "Fullscreen", windowMode === "fullscreen" ? "True" : "False");
+    // Peppy closes the game itself when the queue needs the setup; a
+    // confirmation dialog would leave it sitting there instead.
+    text = setIniValue(text, "ConfirmStop", "False");
     // "Maximized" is Dolphin's own render-window size, not a ShowWindow call.
     // Maximising by hand picked the wrong window - Dolphin's main window is
     // the one titled "Faster Melee - Slippi", so the game stayed small and the
@@ -282,6 +285,37 @@ export function isRunning() {
   } catch {
     return false;
   }
+}
+
+/**
+ * End the match Peppy started, politely.
+ *
+ * killAll force-kills every Dolphin by name. That is right before a launch -
+ * clear the decks - and wrong for ending a session: a forced kill gives Dolphin
+ * no chance to tell the other player it is going (which is what leaves them
+ * staring at a connection error), and killing by name would also take down a
+ * second Dolphin someone had open watching a replay. This asks OUR process to
+ * close, and only forces it if it will not go.
+ */
+export async function closeMatch({ forceAfterMs = 4000 } = {}) {
+  const pid = dolphinProc?.pid;
+  if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+  stopHiding();
+  if (!pid) return killAll();
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    execFileSync("taskkill", ["/PID", String(pid)], { stdio: "ignore" });   // asks
+  } catch { /* already gone */ }
+  const deadline = Date.now() + forceAfterMs;
+  while (Date.now() < deadline && isRunning()) await sleep(150);
+  if (isRunning()) {
+    try {
+      execFileSync("taskkill", ["/F", "/PID", String(pid)], { stdio: "ignore" });
+    } catch { /* raced us */ }
+    for (let i = 0; i < 20 && isRunning(); i++) await sleep(150);
+  }
+  dolphinProc = null;
 }
 
 /**

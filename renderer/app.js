@@ -588,7 +588,12 @@ Back of the line - someone else takes the setup.` : "";
   refreshFromServer();
 });
 
-// Someone else is waiting, so this connection ends here and Peppy sets up the
+// Somebody joined the queue mid-session: the game they are on is the last one.
+net?.onLastGame?.(() => {
+  bridge?.notifyBlink();
+});
+
+// The last game is over, so this connection ends here and Peppy sets up the
 // next match. Said out loud, because the game is about to close itself.
 net?.onSessionOver?.(() => {
   showOverlay({
