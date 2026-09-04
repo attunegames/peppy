@@ -54,3 +54,20 @@ await wait(1000);
 ok("stopping the watch stops the reports", seen.length === 2);
 
 fs.rmSync(dir, { recursive: true, force: true });
+
+// --- a game that was walked out of has no winner to read ---
+// Peppy used to fall back to counting stocks in the last frame it could see,
+// which hands the win to whoever was ahead when they closed Dolphin.
+{
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "peppy-quit-"));
+  const cut = path.join(dir2, "Game_cut.slp");
+  fs.writeFileSync(cut, full.subarray(0, Math.floor(full.length * 0.75)));
+  const done = path.join(dir2, "Game_whole.slp");
+  fs.writeFileSync(done, full);
+
+  ok("a walked-out game reports no winner",
+    replays.readResult(cut, codes[0], codes[1]) === null);
+  ok("a finished game still reports one",
+    replays.readResult(done, codes[0], codes[1]) !== null);
+  fs.rmSync(dir2, { recursive: true, force: true });
+}
