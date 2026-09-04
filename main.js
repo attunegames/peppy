@@ -83,7 +83,8 @@ ipcMain.handle("slippi-info", async () => {
 
 // Launch a direct match: hidden Dolphin, revealed once actually connected.
 ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, color,
-                                            stagePicker = true, windowMode = "maximized" }) => {
+                                            stagePicker = true, windowMode = "maximized",
+                                            viaQueue = false }) => {
   const d = await orchestrator();
   try {
     // Never restart a match that is already running: relaunching kills the
@@ -107,7 +108,10 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     d.writeMatchConfigs({ opponentCode, stageId, character, color, stagePicker, windowMode });
     const pid = d.launch({ isoPath });
     // remember what this match was, so the result can be read afterwards
-    matchContext = { opponentCode, startedAt: Date.now() };
+    // viaQueue: only a match the rotation set up answers to the rotation. Two
+    // people who challenged each other directly are not interrupted because
+    // somebody joined the queue, and are not watched for leaving it.
+    matchContext = { opponentCode, startedAt: Date.now(), viaQueue };
     startCasting();          // let spectators watch (best effort)
     d.hideUntilConnected(pid, async (state) => {
       send("match-state", state);
@@ -126,7 +130,7 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
  * not look at their games at all.
  */
 async function someoneIsWaiting() {
-  if (!matchContext) return false;
+  if (!matchContext?.viaQueue) return false;
   try {
     const n = await network();
     const me = n.status().player;
@@ -138,6 +142,58 @@ async function someoneIsWaiting() {
   } catch {
     return false;               // can't ask: leave them alone
   }
+}
+
+/**
+ * Has the other player stopped playing?
+ *
+ * Their client tells the server when they close Dolphin. If they are no longer
+ * marked as playing then the connection this client is sitting in is already
+ * dead - they are at a character select with nobody on the other end - so the
+ * game may as well close and let them back into the queue.
+ *
+ * Reading it from the server rather than from a disconnect message means it
+ * works the same whether they closed Dolphin, closed Peppy, or their PC died.
+ */
+async function opponentIsGone() {
+  const ctx = matchContext;
+  if (!ctx?.viaQueue) return false;
+  if (Date.now() - ctx.startedAt < 45000) return false;   // let the match settle
+  try {
+    const n = await network();
+    const rows = await n.queueList();
+    const them = (rows ?? []).find((r) =>
+      String(r.connect_code).toUpperCase() === String(ctx.opponentCode).toUpperCase());
+    return !them || them.state !== "playing";
+  } catch {
+    return false;               // can't ask: assume they are still there
+  }
+}
+
+/** They left. Close the dead game and put this player back in the queue. */
+async function opponentLeft() {
+  const ctx = matchContext;
+  if (!ctx) return;
+  matchContext = null;          // Peppy is closing this one, not the player
+  stopWatchingGames();
+  console.log("[queue]", ctx.opponentCode, "is gone - closing this match");
+  send("opponent-left", { opponentCode: ctx.opponentCode });
+
+  // Report the last game if it finished and nobody has said so yet; the server
+  // discards it if the other client already did.
+  try {
+    const n = await network();
+    const replays = await import("./orchestrator/replays.mjs");
+    const identity = (await orchestrator()).readSlippiIdentity();
+    const file = replays.findReplaySince(ctx.startedAt - 60000);
+    if (file && identity && replays.isFinished(file)) {
+      const result = replays.readResult(file, identity.connectCode, ctx.opponentCode);
+      if (result) await n.reportResult(ctx.opponentCode, result.iWon, result.matchKey);
+    }
+    await n.queueJoin();        // still here, still in line
+  } catch { /* offline; the poll loop resyncs */ }
+  await stopCasting();
+  await (await orchestrator()).closeMatch();
 }
 
 /**
@@ -260,9 +316,11 @@ async function finishMatch() {
         swept: row?.swept ?? false, sweeps: row?.sweeps ?? 0, source: "replay",
       });
     } catch { /* server unhappy; the poll loop will resync */ }
-    // The game is closed, so this player is not in a match any more. Back to
-    // waiting keeps their place in line (joined_at only moves on spectating).
-    try { await n.queueJoin(); } catch { /* offline; the poll loop resyncs */ }
+    // They closed the game themselves - between games, at a character select,
+    // whenever. That is leaving, so they come out of the queue rather than
+    // being handed another match they are not sitting at.
+    try { await n.queueLeave(); } catch { /* offline; the poll loop resyncs */ }
+    send("left-queue", { opponentCode: ctx.opponentCode });
     return;
   }
 
@@ -410,8 +468,9 @@ async function startPolling() {
       if (signal === "ready") send("net-pairing-ready", pairing);   // the go signal
 
       // Only look at their games once somebody is waiting for the setup.
-      if (matchContext) {
-        if (await someoneIsWaiting()) await watchForTheLastGame();
+      if (matchContext?.viaQueue) {
+        if (await opponentIsGone()) await opponentLeft();
+        else if (await someoneIsWaiting()) await watchForTheLastGame();
         else stopWatchingGames();
       }
 

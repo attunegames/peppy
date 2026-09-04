@@ -572,6 +572,7 @@ net?.onPairingReady(async (p) => {
     stagePicker: p.i_pick_stage != null ? !!p.i_pick_stage
                                         : backend.me.code < String(p.other_code || ""),
     windowMode: windowChoice(),
+    viaQueue: true,               // the rotation set this up, so it may end it
   });
   if (!res.ok) { closeOverlay(); alert("Couldn't start the game:\n\n" + res.error); }
 });
@@ -597,6 +598,27 @@ SWEEP! You beat everyone here (${r.sweeps} total).
 Back of the line - someone else takes the setup.` : "";
   showOverlay({ text: line + swept, spinner: false, ready: false, cancel: false });
   setTimeout(closeOverlay, r.swept ? 5000 : 2000);
+  refreshFromServer();
+});
+
+// The other player closed their game, so this connection is already dead.
+net?.onOpponentLeft?.((r) => {
+  showOverlay({
+    text: `${r.opponentCode} left.
+Closing this one - you're back in the queue.`,
+    spinner: true, ready: false, cancel: false,
+  });
+  setTimeout(() => { closeOverlay(); refreshFromServer(); }, 4000);
+});
+
+// You closed the game yourself, so you are out of the queue.
+net?.onLeftQueue?.(() => {
+  myQueueState = "out";
+  showOverlay({
+    text: "You closed the game, so you've left the queue.\nJoin again whenever you're ready.",
+    spinner: false, ready: false, cancel: false,
+  });
+  setTimeout(closeOverlay, 4000);
   refreshFromServer();
 });
 
