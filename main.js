@@ -165,7 +165,11 @@ async function finishMatch() {
     } catch { /* server unhappy; the poll loop will resync */ }
     return;
   }
-  // couldn't tell from the replay - let the player say
+  // Couldn't tell from the replay - maybe they quit before a game finished, or
+  // closed Dolphin outright. Either way the match is over, so step out of
+  // 'playing' rather than sitting there as a match nobody is in. (Rejoining as
+  // 'waiting' keeps your place: joined_at only moves if you were spectating.)
+  try { await n.queueJoin(); } catch { /* offline; the poll loop resyncs */ }
   send("ask-result", { opponentCode: ctx.opponentCode });
 }
 

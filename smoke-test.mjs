@@ -229,7 +229,10 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
 {
   d.writeMatchConfigs({ opponentCode: "TEST#001", character: "FOX", stageId: 3 });
   const ini = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
-  // 987F0009 stores the byte; the word before it is what gets stored.
+  // 987F0009 stores the byte; the word before it is what gets stored. Compare
+  // on the payload with its formatting stripped, so a line break cannot hide
+  // the pair.
+  const hex = ini.replace(/[^0-9A-F]/g, "");
   ok("Pokemon Stadium is not forced frozen",
-    ini.includes("38600000 987F0009") && !ini.includes("38600001 987F0009"));
+    hex.includes("38600000987F0009") && !hex.includes("38600001987F0009"));
 }
