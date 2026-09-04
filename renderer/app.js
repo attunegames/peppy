@@ -588,6 +588,15 @@ Back of the line - someone else takes the setup.` : "";
   refreshFromServer();
 });
 
+// Someone else is waiting, so this connection ends here and Peppy sets up the
+// next match. Said out loud, because the game is about to close itself.
+net?.onSessionOver?.(() => {
+  showOverlay({
+    text: "Someone's waiting for the setup.\nPeppy is lining up the next match.",
+    spinner: true, ready: false, cancel: false,
+  });
+});
+
 // The replay could not be read - ask rather than guess.
 let askingAbout = null;
 net?.onAskResult((r) => {
