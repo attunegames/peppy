@@ -97,6 +97,10 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     }
     // Close any Dolphin still running FIRST: on Windows a live process holds
     // its config and log files open, and writing them then fails with EBUSY.
+    // Forget the old match before killing it, or its watcher would read the
+    // kill as that player walking out and forfeit a match they already played.
+    matchContext = null;
+    stopWatchingGames();
     d.killAll();
     await new Promise((r) => setTimeout(r, 400));
     const { isoPath } = d.ensureSandbox();
@@ -232,17 +236,21 @@ async function finishMatch() {
   await stopCasting();
   const ctx = matchContext;
   matchContext = null;
-  if (!ctx) return;
+  if (!ctx) return;                       // Peppy closed it: already handled
   const n = await network();
   if (!n.status().player) return;
 
   const replays = await import("./orchestrator/replays.mjs");
   const identity = (await orchestrator()).readSlippiIdentity();
-  // Slippi flushes the file on exit; give it a moment.
+
+  // Dolphin is gone and Peppy did not close it, so somebody quit or it
+  // crashed. The replay says which: a game that finished has an ending, a game
+  // that was walked out of does not.
   for (let attempt = 0; attempt < 6; attempt++) {
     await new Promise((r) => setTimeout(r, 1000));
     const file = replays.findReplaySince(ctx.startedAt - 60000);
     if (!file || !identity) continue;
+    if (!replays.isFinished(file)) break;          // mid-game: forfeit below
     const result = replays.readResult(file, identity.connectCode, ctx.opponentCode);
     if (!result) continue;
     try {
@@ -252,15 +260,25 @@ async function finishMatch() {
         swept: row?.swept ?? false, sweeps: row?.sweeps ?? 0, source: "replay",
       });
     } catch { /* server unhappy; the poll loop will resync */ }
+    // The game is closed, so this player is not in a match any more. Back to
+    // waiting keeps their place in line (joined_at only moves on spectating).
+    try { await n.queueJoin(); } catch { /* offline; the poll loop resyncs */ }
     return;
   }
-  // Couldn't tell from the replay - maybe they quit before a game finished, or
-  // closed Dolphin outright. Either way the match is over, so step out of
-  // 'playing' rather than sitting there as a match nobody is in. (Rejoining as
-  // 'waiting' keeps your place: joined_at only moves if you were spectating.)
-  try { await n.queueJoin(); } catch { /* offline; the poll loop resyncs */ }
-  send("ask-result", { opponentCode: ctx.opponentCode });
+
+  // Closed or crashed mid-game. That is a forfeit: the win goes to the player
+  // who was still there, and whoever walked away steps out of the queue rather
+  // than being handed a match they are not at the keyboard for.
+  try {
+    await n.reportResult(ctx.opponentCode, false, null);
+  } catch { /* offline: the other client reports the same outcome */ }
+  try { await n.queueLeave(); } catch { /* offline */ }
+  send("match-result", {
+    opponentCode: ctx.opponentCode, iWon: false, swept: false, sweeps: 0,
+    source: "forfeit",
+  });
 }
+
 
 // Watch someone else's match: subscribe to their stream, rebuild it locally,
 // and open Slippi's playback build once there is something to show.

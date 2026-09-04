@@ -578,6 +578,18 @@ net?.onPairingReady(async (p) => {
 
 // Peppy read the result out of the replay.
 net?.onMatchResult((r) => {
+  if (r.source === "forfeit") {
+    // Their game went away mid-match, so it is a loss and they are out of the
+    // queue - rejoining is one button, and it should be their choice.
+    myQueueState = "out";
+    showOverlay({
+      text: "The game closed mid-match, so that's a loss.\nYou've left the queue - join again when you're ready.",
+      spinner: false, ready: false, cancel: false,
+    });
+    setTimeout(closeOverlay, 5000);
+    refreshFromServer();
+    return;
+  }
   const line = r.iWon ? "You won!" : "Good game.";
   const swept = r.swept ? `
 

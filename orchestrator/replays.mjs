@@ -118,9 +118,14 @@ export function readResult(file, myCode, opponentCode) {
 
     let winnerIndex = null;
 
-    // Someone quitting out hands the win to the other player.
+    // No ending means the game never finished - Dolphin was closed or crashed
+    // mid-game. There is no winner to read here, and guessing from whoever was
+    // ahead on stocks would hand the win to the person who walked away.
     const end = game.getGameEnd();
-    if (end && end.lrasInitiatorIndex != null && end.lrasInitiatorIndex >= 0) {
+    if (!end) return null;
+
+    // Someone quitting out hands the win to the other player.
+    if (end.lrasInitiatorIndex != null && end.lrasInitiatorIndex >= 0) {
       winnerIndex = end.lrasInitiatorIndex === me.playerIndex ? them.playerIndex : me.playerIndex;
     }
 
