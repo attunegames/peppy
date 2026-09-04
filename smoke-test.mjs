@@ -192,36 +192,30 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
 
 }
 
-// --- the costume is pressed for, not written ---
-// Writing the byte set the value but not whatever else the game does when you
-// press X, and the colour did not survive into game 2. A fresh direct
-// connection starts on the default costume and Peppy only ever acts on that
-// first screen, so the costume index is simply the number of X presses.
+// --- the costume is written, and it is written for every game ---
+// Pressing X for it (v0.8.x) set nothing: the press code exits as soon as a
+// character is chosen, which is exactly when the costume needs cycling. Their
+// replays came back costume 0 in every game.
 {
   const geckos = JSON.parse(fs.readFileSync("./resources/geckos.json", "utf8"));
-  ok("there is a press payload per character",
-    Object.keys(geckos.charPress).length === Object.keys(geckos.charPick).length);
-  ok("the costume lives in the press, not the cursor",
-    geckos.charPress.FOX.includes("3BE0005B") && !geckos.charPick.FOX.includes("3BE0005B"));
-  ok("the press knows each character's costume count",
-    geckos.costumes.FOX === 4 && geckos.costumes.MARTH === 5 && geckos.costumes.KIRBY === 6);
-
-  // 0x400 = X, 0x100 = A, 0x500 = both (cleared between presses).
-  ok("X is among the buttons it can press", geckos.charPress.FOX.includes("3B200400"));
-  ok("A is still what chooses the character", geckos.charPress.FOX.includes("3B200100"));
-  // Two data words live in the payload: the stand-down (3FE06000 tests it) and
-  // the running press count (3F606000). Both start life as a nop.
-  ok("the press count survives between frames", geckos.charPress.FOX.includes("3F606000"));
-  ok("the presses stop after game 1", geckos.charPress.FOX.includes("3FE06000"));
+  ok("the costume lives with the cursor code, which keeps running",
+    geckos.charPick.FOX.includes("3BE0005B"));
+  ok("there is one press payload, and it only presses A",
+    typeof geckos.charPress === "string" && geckos.charPress.includes("3B200100") === false);
 
   d.writeMatchConfigs({ opponentCode: "TEST#001", character: "KIRBY", color: 5 });
   const ini = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
   ok("Kirby's sixth costume is asked for", ini.includes("3BE00005"));
+  ok("the costume placeholder is gone", !ini.includes("3BE0005B"));
+}
 
-  // Marth has five, so a sixth is nonsense - and cycling for a costume that
-  // does not exist would sit on the button forever.
-  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "MARTH", color: 5 });
-  const marth = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
-  ok("a colour a character does not have is clamped, never pressed for",
-    marth.includes("3BE00004") && !marth.includes("3BE00005"));
+// --- friendlies play the stage the game normally plays ---
+// Every replay from the scene test came back isFrozenPS, which is what ranked
+// uses. The lock-in had it hardcoded on.
+{
+  d.writeMatchConfigs({ opponentCode: "TEST#001", character: "FOX", stageId: 3 });
+  const ini = fs.readFileSync(path.join(USER, "GameSettings", "GALE01r2.ini"), "utf8");
+  // 987F0009 stores the byte; the word before it is what gets stored.
+  ok("Pokemon Stadium is not forced frozen",
+    ini.includes("38600000 987F0009") && !ini.includes("38600001 987F0009"));
 }

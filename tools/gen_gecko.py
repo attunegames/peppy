@@ -27,8 +27,6 @@ because nothing there is transmitted except the lock-in message.
 Usage:  python tools/export_geckos.py     (writes resources/geckos.json)
 Requires: pip install keystone-engine
 """
-import pathlib
-import re
 import struct
 
 import keystone
@@ -73,25 +71,6 @@ CHAR_TABLE = {
 }
 
 
-def costume_counts():
-    """How many costumes each character has, read from renderer/costumes.js.
-
-    That file is the app's costume table; baking the counts in from the same
-    place means a payload can never believe in a colour the picker cannot
-    offer, or refuse one it can.
-    """
-    src = (pathlib.Path(__file__).resolve().parent.parent
-           / "renderer" / "costumes.js").read_text(encoding="utf-8")
-    counts = {}
-    for line in src.splitlines():
-        m = re.match(r"\s*([A-Z]+):\s*\[(.+)\],\s*$", line)
-        if m:
-            counts[m.group(1)] = m.group(2).count('["')
-    missing = [n for n in CHAR_TABLE if n not in counts]
-    assert not missing, f"no costumes listed for {missing}"
-    return counts
-
-
 def call(addr):
     return f"""
     lis 12, 0x{(addr >> 16) & 0xFFFF:X}
@@ -126,16 +105,21 @@ stb 3, -0x5036(13)
 """
 
 
-def lockin_block(stage_id, random_stage=False):
+def lockin_block(stage_id, random_stage=False, frozen_ps=0):
     """FN_TX_LOCK_IN equivalent: EXI 0xB5 with a 10-byte selections payload.
 
     The stage fields are a value plus an option byte: option 1 means "use this
     stage id", option 3 means "random" (and the id is ignored). That is the
     same pair the game itself sends, so random here is the game's own random
     legal stage, not a list Peppy invents.
+
+    The last byte is frozen Pokemon Stadium. It was hardcoded to 1, which is
+    what ranked plays on - the scene noticed, because their replays all came
+    back isFrozenPS. Friendlies get the stage as the game normally plays it.
     """
     stage_value = 0 if random_stage else stage_id
     stage_opt = 3 if random_stage else 1
+    frozen_ps = 1 if frozen_ps else 0
     return f"""
 li 3, 10
 {call(ALLOC)}
@@ -160,7 +144,7 @@ li 3, {stage_opt}
 stb 3, 7(31)
 lbz 3, -0x5060(13)
 stb 3, 8(31)
-li 3, 1
+li 3, {frozen_ps}
 stb 3, 9(31)
 mr 3, 31
 li 4, 10
@@ -259,6 +243,11 @@ def build_autodirect_asm(stage_id, stage_picker, random_stage=False):
     phase 2 (connected): re-assert the lock-in on a few ticks. Melee wants a
     second START press once the opponent appears; without this both clients sit
     connected forever.
+
+    After the last of those the code retires itself and clears CHOSESTAGE. That
+    byte is how the game knows whether a stage was already picked, and leaving
+    Peppy's game-1 answer standing meant game 2 never reached the stage select -
+    the scene got a random stage instead of the loser picking.
     """
     return f"""
 stwu 1, -0x90(1)
@@ -348,6 +337,12 @@ b EXIT
 DO_RELOCK:
 {roles_block(stage_picker)}
 {lockin_block(stage_id, random_stage)}
+cmpwi 27, 420
+bne EXIT
+li 3, 2
+stw 3, 0(30)
+li 3, 0
+stb 3, -0x5036(13)
 
 EXIT:
 lmw 25, 0x20(1)
@@ -513,6 +508,9 @@ def build_charpick_asm(char_name, with_color=True):
     The CURSOR is what stands down after game 1 - see standdown_block.
     """
     ckind, tx, ty = CHAR_TABLE[char_name.upper()]
+    color_block = (
+        f"li 31, {COLOR_TOKEN_VALUE}\nstb 31, 0x73(30)\n" if with_color else ""
+    )
     return f"""
 stwu 1, -0x60(1)
 mflr 0
@@ -565,7 +563,9 @@ add 26, 26, 31
 mr 30, 26
 lbz 26, 0x70(26)
 cmpwi 26, {ckind}
-beq CP_EXIT
+bne CP_PICK
+{color_block}b CP_EXIT
+CP_PICK:
 {standdown_block("CP")}
 
 {_load_word(31, _f32_bits(tx))}stw 31, 0xC(29)
@@ -583,31 +583,7 @@ addi 1, 1, 0x60
 
 # Pulse A once per frame while the cursor holds its token. Port derivation
 # mirrors the game: one door -> mnCharSel_804D6CF0, otherwise cursor->x4.
-def build_charpress_asm(char_name, costumes):
-    """Press the buttons a player would press: A to choose, X to reach a colour.
-
-    A is set the way the game reads it - a bit in the pad status - because the
-    CSS only reacts to real presses. The costume works the same way, and it has
-    to: writing the costume byte sets the value but not whatever else the game
-    does when you press X, and the colour did not survive into game 2.
-
-    A fresh direct connection always starts on the default costume, and this
-    code only ever runs on that first character select - from game 2 the screen
-    is the players' own. So the costume index IS the number of X presses, and
-    Peppy simply counts them out. The count lives in a data word (which starts
-    life as a `nop`, hence the 0x60000000 test) and is bumped only on the frames
-    a press is actually sent.
-
-    Costume 0 presses nothing. A costume this character does not have presses
-    nothing either, rather than counting past the end of the list and landing
-    somewhere arbitrary.
-
-    Once there is nothing left to press this returns without touching the pad at
-    all: while pressing it has to clear the button in between, and doing that
-    afterwards would swallow the player's own A and X.
-    """
-    ckind, _, _ = CHAR_TABLE[char_name.upper()]
-    return f"""
+CHARPRESS_ASM = f"""
 stwu 1, -0x60(1)
 mflr 0
 stw 0, 0x5C(1)
@@ -622,18 +598,6 @@ cmpwi 31, 8
 bne PR_EXIT
 
 lbz 31, -0x49AA(13)
-cmpwi 31, 0
-bne PR_EXIT
-
-lis 31, 0x8000
-ori 31, 31, 0x5614
-lwz 31, 0(31)
-cmpwi 31, 0
-beq PR_EXIT
-lwz 31, 0(31)
-cmpwi 31, 0
-beq PR_EXIT
-lbz 31, 1(31)
 cmpwi 31, 0
 bne PR_EXIT
 {standdown_block("PR")}
@@ -662,35 +626,6 @@ PR_HAVE_PORT:
 cmpwi 28, 4
 bge PR_EXIT
 
-li 25, 0x100
-lwz 26, -0x49F0(13)
-cmpwi 26, 0
-beq PR_HAVE_BUTTON
-mulli 30, 28, 0x24
-add 26, 26, 30
-lbz 26, 0x70(26)
-cmpwi 26, {ckind}
-bne PR_HAVE_BUTTON
-
-li 31, {COLOR_TOKEN_VALUE}
-cmpwi 31, {costumes}
-bge PR_EXIT
-bl PR_AFTER_COUNT
-nop
-PR_AFTER_COUNT:
-mflr 30
-lwz 26, 0(30)
-lis 27, 0x6000
-cmpw 26, 27
-bne PR_HAVE_COUNT
-li 26, 0
-stw 26, 0(30)
-PR_HAVE_COUNT:
-cmpw 26, 31
-bge PR_EXIT
-li 25, 0x400
-
-PR_HAVE_BUTTON:
 lis 27, 0x804C
 ori 27, 27, 0x20BC
 mulli 31, 28, 0x44
@@ -704,29 +639,19 @@ lis 31, 0x8048
 lwz 31, -0x62A0(31)
 andi. 31, 31, 3
 bne PR_CLEAR
-
-cmpwi 25, 0x400
-bne PR_SET
-lwz 26, 0(30)
-addi 26, 26, 1
-stw 26, 0(30)
-
-PR_SET:
 lwz 26, 0(27)
-or 26, 26, 25
+ori 26, 26, 0x100
 stw 26, 0(27)
 lwz 26, 8(27)
-or 26, 26, 25
+ori 26, 26, 0x100
 stw 26, 8(27)
 b PR_EXIT
-
 PR_CLEAR:
-li 25, 0x500
 lwz 26, 0(27)
-andc 26, 26, 25
+rlwinm 26, 26, 0, 24, 22
 stw 26, 0(27)
 lwz 26, 8(27)
-andc 26, 26, 25
+rlwinm 26, 26, 0, 24, 22
 stw 26, 8(27)
 
 PR_EXIT:
@@ -782,13 +707,12 @@ def assemble_charpick(char_name, with_color=True):
                     [CHARPICK_ORIG_INSTR])
 
 
-def assemble_charpress(char_name, costumes):
-    return _emit_c2(build_charpress_asm(char_name, costumes), CHARPRESS_HOOK_ADDR,
-                    [CHARPRESS_ORIG_INSTR])
+def assemble_charpress():
+    return _emit_c2(CHARPRESS_ASM, CHARPRESS_HOOK_ADDR, [CHARPRESS_ORIG_INSTR])
 
 
 if __name__ == "__main__":
     print("# $AutoBoot");   print(assemble_boot())
     print("# $AutoDirect"); print(assemble())
     print("# $CharPick FOX"); print(assemble_charpick("FOX"))
-    print("# $CharPress FOX"); print(assemble_charpress("FOX", 4))
+    print("# $CharPress"); print(assemble_charpress())
