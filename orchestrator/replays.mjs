@@ -75,7 +75,9 @@ export function isFinished(file) {
  * when somebody remembered to quit out, and anyone waiting in the queue waited
  * on that. Peppy now sees each game finish as it happens.
  *
- * onGame(result) fires once per completed game. Returns a stop function.
+ * onGame({...result, file, endedAt}) fires once per completed game. endedAt is
+ * when the game actually ended, so both players can count from the same moment
+ * rather than from whenever their own poll happened to notice.
  */
 export function watchGames({ sinceMs, myCode, opponentCode, onGame,
                              everyMs = 2000, dir = replayDir() }) {
@@ -86,7 +88,10 @@ export function watchGames({ sinceMs, myCode, opponentCode, onGame,
       const result = readResult(file, myCode, opponentCode);
       if (!result) continue;
       reported.add(file);
-      try { onGame(result); } catch { /* never let a listener stop the watch */ }
+      let endedAt = Date.now();
+      try { endedAt = fs.statSync(file).mtimeMs; } catch { /* use now */ }
+      try { onGame({ ...result, file, endedAt }); }
+      catch { /* never let a listener stop the watch */ }
     }
   }, everyMs);
   return () => clearInterval(timer);

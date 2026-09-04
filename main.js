@@ -105,7 +105,6 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     // remember what this match was, so the result can be read afterwards
     matchContext = { opponentCode, startedAt: Date.now() };
     startCasting();          // let spectators watch (best effort)
-    watchGamesLive();        // the rotation moves on its own, mid-session
     d.hideUntilConnected(pid, async (state) => {
       send("match-state", state);
       if (state === "gone") await finishMatch();
@@ -117,41 +116,53 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
 });
 
 /**
- * Report each game as it finishes, and step aside when the queue needs the
- * setup.
+ * Who is waiting for the setup, other than the two people playing?
  *
- * The rotation used to wait for Dolphin to close: a set ended when someone
- * remembered to quit out, and everyone waiting waited on that. Now Peppy sees
- * each game end, reports it, and asks the server whether these two should keep
- * going. Two people alone keep playing untouched. With someone else waiting,
- * the server puts both back in the queue - and then the game closes itself and
- * the next pairing goes out.
+ * Nobody waiting means nothing to decide: the pair carries on and Peppy does
+ * not look at their games at all.
  */
-async function watchGamesLive() {
-  stopWatchingGames();
+async function someoneIsWaiting() {
+  if (!matchContext) return false;
+  try {
+    const n = await network();
+    const me = n.status().player;
+    const rows = await n.queueList();
+    return (rows ?? []).some((r) =>
+      r.state === "waiting" && r.online !== false &&
+      r.player_id !== me?.id &&
+      String(r.connect_code).toUpperCase() !== String(matchContext.opponentCode).toUpperCase());
+  } catch {
+    return false;               // can't ask: leave them alone
+  }
+}
+
+/**
+ * Start watching for the current game to end - but only once somebody is
+ * waiting for the setup.
+ *
+ * Two people alone are never interrupted and never even looked at. The moment
+ * a third joins the queue, Peppy starts watching, and the game they are on is
+ * the last one: when it ends, the result goes in and the connection closes so
+ * the next pairing can start.
+ *
+ * The watch starts from NOW, never from the beginning of the session: earlier
+ * games of this set are already finished on disk, and treating one of those as
+ * "the game just ended" would cut them off mid-match.
+ */
+async function watchForTheLastGame() {
+  if (stopGameWatch || !matchContext) return;
   const ctx = matchContext;
-  if (!ctx) return;
   const replays = await import("./orchestrator/replays.mjs");
   const identity = (await orchestrator()).readSlippiIdentity();
   if (!identity) return;
 
+  console.log("[queue] someone is waiting - this is the last game");
+  send("last-game", { opponentCode: ctx.opponentCode });
   stopGameWatch = replays.watchGames({
-    sinceMs: ctx.startedAt - 5000,
+    sinceMs: Date.now(),
     myCode: identity.connectCode,
     opponentCode: ctx.opponentCode,
-    onGame: async (result) => {
-      let swept = false, sweeps = 0;
-      try {
-        const n = await network();
-        const [row] = await n.reportResult(ctx.opponentCode, result.iWon, result.matchKey);
-        swept = row?.swept ?? false;
-        sweeps = row?.sweeps ?? 0;
-      } catch { /* offline: the game still happened, the queue will resync */ }
-      send("match-result", {
-        opponentCode: ctx.opponentCode, iWon: result.iWon, swept, sweeps, source: "replay",
-      });
-      await maybeEndSession();
-    },
+    onGame: (result) => endSession(ctx, result),
   });
 }
 
@@ -161,29 +172,34 @@ function stopWatchingGames() {
 }
 
 /**
- * Does the queue want this setup back? The server decides: it leaves two
- * players alone and only puts a pair back in the queue when someone else is
- * waiting. If it has, close the game so the next match can start - after a few
- * seconds, so nobody is yanked off the results screen.
+ * The game that ends the session just ended: record it, say so, and close the
+ * game so the next pairing can go out.
+ *
+ * The wait is counted from when the game ACTUALLY ended, not from when this
+ * client noticed, so both machines close within a moment of each other -
+ * whoever closes first drops the other's connection, and a straggler would sit
+ * on a connection error until their own Peppy caught up.
  */
-async function maybeEndSession() {
-  let stillPlaying = true;
+async function endSession(ctx, result) {
+  stopWatchingGames();
+  if (!(await someoneIsWaiting())) return;      // they left again: carry on
+
+  let swept = false, sweeps = 0;
   try {
     const n = await network();
-    const me = n.status().player;
-    const rows = await n.queueList();
-    const mine = rows?.find((r) => r.player_id === me?.id);
-    stillPlaying = !mine || mine.state === "playing";
-  } catch {
-    return;               // can't ask: leave them playing
-  }
-  if (stillPlaying) return;
+    const [row] = await n.reportResult(ctx.opponentCode, result.iWon, result.matchKey);
+    swept = row?.swept ?? false;
+    sweeps = row?.sweeps ?? 0;
+  } catch { /* offline: the game still happened, the queue resyncs */ }
+  send("match-result", {
+    opponentCode: ctx.opponentCode, iWon: result.iWon, swept, sweeps, source: "replay",
+  });
+  send("session-over", { opponentCode: ctx.opponentCode });
 
-  send("session-over", { opponentCode: matchContext?.opponentCode ?? null });
-  stopWatchingGames();
-  await new Promise((r) => setTimeout(r, 6000));   // let the results screen sit
+  const closeAt = (result.endedAt ?? Date.now()) + 8000;   // let the results screen sit
+  await new Promise((r) => setTimeout(r, Math.max(0, Math.min(15000, closeAt - Date.now()))));
   matchContext = null;
-  (await orchestrator()).killAll();
+  await (await orchestrator()).closeMatch();
 }
 
 // Share our live match so people in the queue can watch. Entirely optional:
@@ -374,6 +390,12 @@ async function startPolling() {
         if (win && !win.isFocused()) win.flashFrame(true);
       }
       if (signal === "ready") send("net-pairing-ready", pairing);   // the go signal
+
+      // Only look at their games once somebody is waiting for the setup.
+      if (matchContext) {
+        if (await someoneIsWaiting()) await watchForTheLastGame();
+        else stopWatchingGames();
+      }
 
       if (incoming) {
         send("net-incoming", incoming);
