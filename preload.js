@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("peppy", {
     onPairing: (cb) => ipcRenderer.on("net-pairing", (_e, p) => cb(p)),
     onPairingReady: (cb) => ipcRenderer.on("net-pairing-ready", (_e, p) => cb(p)),
     onMatchResult: (cb) => ipcRenderer.on("match-result", (_e, r) => cb(r)),
+    onSessionOver: (cb) => ipcRenderer.on("session-over", (_e, r) => cb(r)),
     onAskResult: (cb) => ipcRenderer.on("ask-result", (_e, r) => cb(r)),
     // spectating
     spectateStart: (playerId, name) => ipcRenderer.invoke("spectate-start", { playerId, name }),

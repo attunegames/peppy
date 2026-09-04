@@ -28,10 +28,10 @@ export function replayDir() {
   return fs.existsSync(fallback) ? fallback : null;
 }
 
-/** Newest .slp written since `sinceMs`, searching the monthly subfolders. */
-export function findReplaySince(sinceMs, dir = replayDir()) {
-  if (!dir) return null;
-  let best = null;
+/** Every .slp written since `sinceMs`, oldest first, across monthly folders. */
+export function replaysSince(sinceMs, dir = replayDir()) {
+  if (!dir) return [];
+  const found = [];
   const walk = (d) => {
     let entries = [];
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -41,12 +41,55 @@ export function findReplaySince(sinceMs, dir = replayDir()) {
       else if (e.name.endsWith(".slp")) {
         let m;
         try { m = fs.statSync(p).mtimeMs; } catch { continue; }
-        if (m >= sinceMs && (!best || m > best.mtime)) best = { file: p, mtime: m };
+        if (m >= sinceMs) found.push({ file: p, mtime: m });
       }
     }
   };
   walk(dir);
-  return best?.file ?? null;
+  return found.sort((a, b) => a.mtime - b.mtime).map((x) => x.file);
+}
+
+/** Newest .slp written since `sinceMs`. */
+export function findReplaySince(sinceMs, dir = replayDir()) {
+  const all = replaysSince(sinceMs, dir);
+  return all.length ? all[all.length - 1] : null;
+}
+
+/**
+ * Has this game actually finished? A .slp exists and grows while the game is
+ * being played; the game-end block is only written when it is over, which is
+ * what makes this safe to poll during a live session.
+ */
+export function isFinished(file) {
+  try {
+    return !!new SlippiGame(file).getGameEnd();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Watch for games ending WHILE the two players are still connected.
+ *
+ * The rotation used to wait for Dolphin to close, which meant a set only ended
+ * when somebody remembered to quit out, and anyone waiting in the queue waited
+ * on that. Peppy now sees each game finish as it happens.
+ *
+ * onGame(result) fires once per completed game. Returns a stop function.
+ */
+export function watchGames({ sinceMs, myCode, opponentCode, onGame,
+                             everyMs = 2000, dir = replayDir() }) {
+  const reported = new Set();
+  const timer = setInterval(() => {
+    for (const file of replaysSince(sinceMs, dir)) {
+      if (reported.has(file) || !isFinished(file)) continue;
+      const result = readResult(file, myCode, opponentCode);
+      if (!result) continue;
+      reported.add(file);
+      try { onGame(result); } catch { /* never let a listener stop the watch */ }
+    }
+  }, everyMs);
+  return () => clearInterval(timer);
 }
 
 /**

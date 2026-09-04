@@ -11,6 +11,7 @@ let pollTimer = null;
 let watchedChallenge = null;
 let announcePairing = null;    // dedupes the poll's pairing signals
 let matchContext = null;       // { opponentCode, startedAt } while a game runs
+let stopGameWatch = null;      // ends the per-game watcher
 
 async function orchestrator() {
   if (!orch) orch = await import("./orchestrator/dolphin.mjs");
@@ -104,6 +105,7 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     // remember what this match was, so the result can be read afterwards
     matchContext = { opponentCode, startedAt: Date.now() };
     startCasting();          // let spectators watch (best effort)
+    watchGamesLive();        // the rotation moves on its own, mid-session
     d.hideUntilConnected(pid, async (state) => {
       send("match-state", state);
       if (state === "gone") await finishMatch();
@@ -113,6 +115,76 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     return { ok: false, error: String(err.message ?? err) };
   }
 });
+
+/**
+ * Report each game as it finishes, and step aside when the queue needs the
+ * setup.
+ *
+ * The rotation used to wait for Dolphin to close: a set ended when someone
+ * remembered to quit out, and everyone waiting waited on that. Now Peppy sees
+ * each game end, reports it, and asks the server whether these two should keep
+ * going. Two people alone keep playing untouched. With someone else waiting,
+ * the server puts both back in the queue - and then the game closes itself and
+ * the next pairing goes out.
+ */
+async function watchGamesLive() {
+  stopWatchingGames();
+  const ctx = matchContext;
+  if (!ctx) return;
+  const replays = await import("./orchestrator/replays.mjs");
+  const identity = (await orchestrator()).readSlippiIdentity();
+  if (!identity) return;
+
+  stopGameWatch = replays.watchGames({
+    sinceMs: ctx.startedAt - 5000,
+    myCode: identity.connectCode,
+    opponentCode: ctx.opponentCode,
+    onGame: async (result) => {
+      let swept = false, sweeps = 0;
+      try {
+        const n = await network();
+        const [row] = await n.reportResult(ctx.opponentCode, result.iWon, result.matchKey);
+        swept = row?.swept ?? false;
+        sweeps = row?.sweeps ?? 0;
+      } catch { /* offline: the game still happened, the queue will resync */ }
+      send("match-result", {
+        opponentCode: ctx.opponentCode, iWon: result.iWon, swept, sweeps, source: "replay",
+      });
+      await maybeEndSession();
+    },
+  });
+}
+
+function stopWatchingGames() {
+  if (stopGameWatch) { try { stopGameWatch(); } catch { /* already stopped */ } }
+  stopGameWatch = null;
+}
+
+/**
+ * Does the queue want this setup back? The server decides: it leaves two
+ * players alone and only puts a pair back in the queue when someone else is
+ * waiting. If it has, close the game so the next match can start - after a few
+ * seconds, so nobody is yanked off the results screen.
+ */
+async function maybeEndSession() {
+  let stillPlaying = true;
+  try {
+    const n = await network();
+    const me = n.status().player;
+    const rows = await n.queueList();
+    const mine = rows?.find((r) => r.player_id === me?.id);
+    stillPlaying = !mine || mine.state === "playing";
+  } catch {
+    return;               // can't ask: leave them playing
+  }
+  if (stillPlaying) return;
+
+  send("session-over", { opponentCode: matchContext?.opponentCode ?? null });
+  stopWatchingGames();
+  await new Promise((r) => setTimeout(r, 6000));   // let the results screen sit
+  matchContext = null;
+  (await orchestrator()).killAll();
+}
 
 // Share our live match so people in the queue can watch. Entirely optional:
 // any failure here is logged and ignored, never affecting the match.
@@ -140,6 +212,7 @@ async function stopCasting() {
 // Melee closed. Find the replay it just wrote and report who won; if the
 // replay cannot be read, ask the player rather than guessing.
 async function finishMatch() {
+  stopWatchingGames();
   await stopCasting();
   const ctx = matchContext;
   matchContext = null;
