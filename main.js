@@ -116,6 +116,7 @@ ipcMain.handle("launch-match", async (_ev, { opponentCode, stageId, character, c
     d.hideUntilConnected(pid, async (state) => {
       send("match-state", state);
       if (state === "gone") await finishMatch();
+      if (state === "disconnected") await sessionDisconnected();
     });
     return { ok: true, pid };
   } catch (err) {
@@ -142,6 +143,26 @@ async function someoneIsWaiting() {
   } catch {
     return false;               // can't ask: leave them alone
   }
+}
+
+/**
+ * The netplay session ended but Dolphin is still open - somebody quit out in
+ * game rather than closing the emulator.
+ *
+ * Which of us did it is not in the log, so give the server a moment to say: if
+ * the other player's client has reported in, they left and this player stays
+ * in the queue. Otherwise it was this player, and closing the game takes them
+ * out of the queue the same as closing Dolphin would.
+ */
+async function sessionDisconnected() {
+  if (!matchContext) return;
+  console.log("[match] netplay session ended with Dolphin still open");
+  for (let i = 0; i < 4 && matchContext; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (await opponentIsGone()) return opponentLeft();
+  }
+  if (!matchContext) return;
+  await (await orchestrator()).closeMatch();   // "gone" then settles the rest
 }
 
 /**

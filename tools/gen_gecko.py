@@ -478,20 +478,23 @@ COLOR_TOKEN_VALUE = 0x5B   # placeholder byte the app rewrites per match
 
 
 def standdown_block(tag):
-    """Run the CURSOR automation for one character-select session only.
+    """Act only BEFORE two players are connected, ever.
 
-    Peppy is there to connect two players, not to run their set: once game 1
-    starts, the cursor belongs to the player again, so they can counterpick
-    like any other friendlies session. The costume is NOT part of this - see
-    build_charpick_asm - because Slippi blocks the costume buttons online, so
-    the only way a chosen colour survives into game 2 is for Peppy to keep
-    writing it.
+    Peppy is there to connect people, not to run their set. Once the connection
+    exists the character select belongs to the players: they counterpick, they
+    change costume, Peppy is done.
 
-    The hook only fires on the character select, so "a game happened" is simply
-    a gap in the frames we see: consecutive CSS frames differ by 0 or 1, while
-    coming back after a game either jumps far ahead or restarts the counter.
-    The two data words start life as `nop` (0x60000000), which is why the unset
-    test is against that value and the done test is `== 1`.
+    "Connected" is the byte the game itself keys off (the same one Slippi's own
+    PreventColorChange uses): zero while the screen is still waiting for an
+    opponent, non-zero once there is one. Seeing it non-zero once retires this
+    code for the rest of the session, which matters because the byte goes back
+    to zero on the character select between games - without the latch, Peppy
+    would wake up in game 2 and start dragging the cursor around again, which
+    is exactly what the scene reported.
+
+    A frame-gap heuristic was tried here first and does not work: that counter
+    only ticks while the screen is up, so it pauses for the whole game and
+    resumes one frame later. The gap it was looking for never happens.
 
     Uses r26-r28 and r31 only: r25/r29/r30 are live by the time CharPick calls
     this (port, cursor object, selection).
@@ -499,29 +502,25 @@ def standdown_block(tag):
     return f"""
 bl {tag}_AFTER_DATA
 nop
-nop
 {tag}_AFTER_DATA:
 mflr 28
-lwz 27, 4(28)
+lwz 27, 0(28)
 cmpwi 27, 1
 beq {tag}_EXIT
-lis 26, 0x8048
-lwz 26, -0x62A0(26)
-lwz 27, 0(28)
-lis 31, 0x6000
-cmpw 27, 31
-beq {tag}_MARK
-cmpw 26, 27
-blt {tag}_STANDDOWN
-subf 31, 27, 26
-cmpwi 31, 120
-bgt {tag}_STANDDOWN
-{tag}_MARK:
-stw 26, 0(28)
-b {tag}_GO
-{tag}_STANDDOWN:
+
+lis 26, 0x8000
+ori 26, 26, 0x5614
+lwz 26, 0(26)
+cmpwi 26, 0
+beq {tag}_GO
+lwz 26, 0(26)
+cmpwi 26, 0
+beq {tag}_GO
+lbz 26, 1(26)
+cmpwi 26, 0
+beq {tag}_GO
 li 31, 1
-stw 31, 4(28)
+stw 31, 0(28)
 b {tag}_EXIT
 {tag}_GO:
 """
@@ -568,7 +567,7 @@ bne CP_EXIT
 lbz 31, -0x49AA(13)
 cmpwi 31, 0
 bne CP_EXIT
-
+{standdown_block("CP")}
 lis 31, 0x8000
 ori 31, 31, 0x5614
 lwz 31, 0(31)
@@ -604,7 +603,6 @@ mr 30, 26
 lbz 26, 0x70(26)
 cmpwi 26, {ckind}
 beq CP_EXIT
-{standdown_block("CP")}
 
 {_load_word(31, _f32_bits(tx))}stw 31, 0xC(29)
 {_load_word(31, _f32_bits(ty))}stw 31, 0x10(29)
@@ -661,7 +659,7 @@ bne PR_EXIT
 lbz 31, -0x49AA(13)
 cmpwi 31, 0
 bne PR_EXIT
-
+{standdown_block("PR")}
 lis 31, 0x8000
 ori 31, 31, 0x5614
 lwz 31, 0(31)
@@ -673,7 +671,6 @@ beq PR_EXIT
 lbz 31, 1(31)
 cmpwi 31, 0
 bne PR_EXIT
-{standdown_block("PR")}
 lbz 30, -0x49B0(13)
 cmpwi 30, 4
 bge PR_EXIT
