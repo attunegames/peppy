@@ -138,8 +138,19 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   ok("fullscreen is set for a fullscreen match",
     /^Fullscreen = True$/mi.test(fs.readFileSync(ini, "utf8")));
   d.writeMatchConfigs({ opponentCode: "TEST#001", character: "FOX", windowMode: "maximized" });
-  ok("a maximized match is not fullscreen",
-    /^Fullscreen = False$/mi.test(fs.readFileSync(ini, "utf8")));
+  const max = fs.readFileSync(ini, "utf8");
+  ok("a maximized match is not fullscreen", /^Fullscreen = False$/mi.test(max));
+  // Maximised is the render window's own size. Maximising a window by title
+  // picked the wrong one - the game list is the window called "Faster Melee".
+  ok("the game window is sized to the screen",
+    /^RenderWindowAutoSize = False$/mi.test(max) &&
+    Number(max.match(/^RenderWindowWidth = (\d+)$/mi)?.[1] ?? 0) > 800 &&
+    Number(max.match(/^RenderWindowHeight = (\d+)$/mi)?.[1] ?? 0) > 600);
+  ok("...in a window of its own, or there is nothing to size",
+    /^RenderToMain = False$/mi.test(max));
+  ok("fullscreen is borderless so it can be tabbed out of",
+    /^BorderlessFullscreen = True$/mi.test(
+      fs.readFileSync(path.join(USER, "Config", "GFX.ini"), "utf8")));
   ok("pause-on-focus-loss stays off (Peppy hides the window on purpose)",
     !/PauseOnFocusLost\s*=\s*True/i.test(fs.readFileSync(ini, "utf8")));
 }
@@ -235,4 +246,16 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   const hex = ini.replace(/[^0-9A-F]/g, "");
   ok("Pokemon Stadium is not forced frozen",
     hex.includes("38600000987F0009") && !hex.includes("38600001987F0009"));
+}
+
+// --- a session that ends without Dolphin closing ---
+// Quitting out in game leaves the emulator open, so the process is no help:
+// Peppy would never know the match was over and the player would sit in the
+// queue as if they were still playing.
+{
+  const src = fs.readFileSync("./orchestrator/dolphin.mjs", "utf8");
+  ok("the log is watched for the connection ending", /Disconnecting peer/.test(src));
+  ok("...only from the moment the match was revealed",
+    src.indexOf("baseline = fs.statSync(log).size") < src.indexOf("if (/Disconnecting peer"));
+  ok("shaders come along to the sandbox", !/\/XD", "Cache"|"Cache", "Dump"/.test(src));
 }

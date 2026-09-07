@@ -455,6 +455,7 @@ Accept within ${mins} min.`,
 
 $("acceptBtn").addEventListener("click", async () => {
   if (!incomingId) return;      // a rotation pairing, handled by its own listener
+  await bridge?.killDolphin();  // make room for the match we just said yes to
   const res = await net.respond(incomingId, true);
   const code = $("overlayText").textContent.match(/\(([A-Z]+#\d+)\)/)?.[1];
   incomingId = null;
@@ -666,6 +667,10 @@ $("acceptBtn").addEventListener("click", async () => {
   if (pairing) {
     const id = pairing.pairing_id;
     showOverlay({ text: "Waiting for them to accept…", spinner: true, cancel: false });
+    // Close anything already running now rather than at launch: the launch is
+    // waiting on the other player, and a Dolphin they opened themselves would
+    // sit there until then.
+    await bridge?.killDolphin();
     const res = await net.pairingRespond(id, true);
     if (!res.ok) { closeOverlay(); pairing = null; alert(res.error); }
     return;   // onPairingReady launches once both sides are in

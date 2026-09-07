@@ -65,7 +65,10 @@ export function ensureSandbox() {
   if (stale) {
     fs.mkdirSync(PEPPY_DATA, { recursive: true });
     try {
-      execFileSync("robocopy", [netplay, SANDBOX, "/E", "/XD", "Cache", "Dump",
+      // Cache is copied on purpose: it holds Dolphin's compiled shaders. Without
+      // it the sandbox recompiles them as they first appear, which the scene
+      // felt as stutter that their own Slippi does not have.
+      execFileSync("robocopy", [netplay, SANDBOX, "/E", "/XD", "Dump",
         "ScreenShots", "Logs", "/NFL", "/NDL", "/NJH", "/NJS"], { stdio: "ignore" });
     } catch (err) {
       // robocopy returns 0-7 for success. A real failure usually means files
@@ -75,7 +78,33 @@ export function ensureSandbox() {
       if (!usable && (err.status === undefined || err.status > 7)) throw err;
     }
   }
+  // A sandbox from before shaders were copied still has none, and Dolphin only
+  // writes them back into its own copy - so top it up from the real install.
+  try {
+    const src = path.join(netplay, "User", "Cache");
+    const dst = path.join(SANDBOX, "User", "Cache");
+    if (fs.existsSync(src) && dirSize(src) > dirSize(dst)) {
+      execFileSync("robocopy", [src, dst, "/E", "/NFL", "/NDL", "/NJH", "/NJS"],
+        { stdio: "ignore" });
+    }
+  } catch { /* shaders are a smoothness nicety, never a reason not to play */ }
   return { sandbox: SANDBOX, isoPath };
+}
+
+/** Rough size of a folder, enough to tell "has shaders" from "does not". */
+function dirSize(dir) {
+  let total = 0;
+  const walk = (d) => {
+    let entries = [];
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else try { total += fs.statSync(p).size; } catch { /* skip */ }
+    }
+  };
+  walk(dir);
+  return total;
 }
 
 /**
@@ -486,7 +515,8 @@ export function revealNow() {
  * The reveal cue is Slippi's own log line ("Connection success!") — no game
  * memory reading needed, which keeps this pure Node.
  *
- * onState(state) receives: "hidden" | "connected" | "timeout" | "gone".
+ * onState(state) receives: "hidden" | "connected" | "timeout" | "gone" |
+ * "disconnected" (the netplay session ended while Dolphin stayed open).
  */
 export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {}) {
   const log = path.join(SANDBOX, LOG_REL);
@@ -497,6 +527,24 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
   let baseline = 0;
   try { baseline = fs.existsSync(log) ? fs.statSync(log).size : 0; } catch { baseline = 0; }
 
+  /** Whatever Slippi has logged since this match started. */
+  const readLogSince = () => {
+    if (!fs.existsSync(log)) return "";
+    try {
+      const size = fs.statSync(log).size;
+      if (size < baseline) baseline = 0;            // log was rotated/cleared
+      if (size <= baseline) return "";
+      const fd = fs.openSync(log, "r");
+      try {
+        const buf = Buffer.alloc(size - baseline);
+        fs.readSync(fd, buf, 0, buf.length, baseline);
+        return buf.toString("latin1");
+      } finally { fs.closeSync(fd); }
+    } catch {
+      return "";                                    // mid-write; try next tick
+    }
+  };
+
   const reveal = (why) => {
     if (revealed) return;
     revealed = true;
@@ -504,6 +552,10 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
     // Showing a window can lose a race with Dolphin creating it. Never leave a
     // player in a match they can hear but not see.
     for (let retry = 0; retry < 3 && shown === 0; retry++) shown = revealWindows(pid);
+    // Start the log afresh from here. Searching for an opponent logs its own
+    // "Disconnecting peer" lines for every attempt that did not answer, and
+    // scanning those back would read the match as over the moment it began.
+    try { baseline = fs.statSync(log).size; } catch { /* keep what we had */ }
     // The watcher stays up. It used to stop here, which meant Peppy never saw
     // Melee close after a match it had connected: no replay was read, no result
     // was reported, and the pairing sat 'ready' on the server so the rotation
@@ -520,24 +572,20 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
       onState?.("gone");
       return;
     }
-    if (revealed) return;         // from here we are only waiting for the exit
-
-    if (fs.existsSync(log)) {
-      let text = "";
-      try {
-        const size = fs.statSync(log).size;
-        if (size < baseline) baseline = 0;          // log was rotated/cleared
-        if (size > baseline) {
-          const fd = fs.openSync(log, "r");
-          try {
-            const buf = Buffer.alloc(size - baseline);
-            fs.readSync(fd, buf, 0, buf.length, baseline);
-            text = buf.toString("latin1");
-          } finally { fs.closeSync(fd); }
-        }
-      } catch { /* mid-write; try again next tick */ }
-      if (text.includes("Connection success!")) return reveal("connected");
+    if (revealed) {
+      // Watch for the netplay session ending. Quitting out in game leaves
+      // Dolphin open, so the process is no help: Peppy would never know the
+      // match was over and the player would sit in the queue as if playing.
+      const text = readLogSince();
+      if (/Disconnecting peer|connection failed|Disconnected from/i.test(text)) {
+        clearInterval(watchTimer);
+        watchTimer = null;
+        onState?.("disconnected");
+      }
+      return;
     }
+
+    if (readLogSince().includes("Connection success!")) return reveal("connected");
     if (Date.now() - started > revealAfterMs) reveal("timeout");
   }, 500);
 
