@@ -18,7 +18,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ConnectionEvent, DolphinConnection, SlpFileWriter } from "@slippi/slippi-js/node";
+// slippi-js is CommonJS, and how well an ESM `import` can pick names out of a
+// CommonJS module depends on the Node version. Electron's is older than the
+// one the tests run on, so a named import works here and throws in the app -
+// taking this module, and everything that depends on it, down with it.
+// createRequire loads it the way it was written, on every version.
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { ConnectionEvent, DolphinConnection, SlpFileWriter } =
+  require("@slippi/slippi-js/node");
 
 const APPDATA = process.env.APPDATA;
 const SLIPPI_DIR = path.join(APPDATA, "Slippi Launcher");
