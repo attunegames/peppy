@@ -488,6 +488,16 @@ async function startPolling() {
       }
       if (signal === "ready") send("net-pairing-ready", pairing);   // the go signal
 
+      // Belt and braces: if Peppy thinks a match is on but Dolphin is not
+      // running, the match ended and the watcher missed it. However the game
+      // went away - escape, a crash, a kill from somewhere else - the queue
+      // must not be left believing this player is still in it.
+      if (matchContext && Date.now() - matchContext.startedAt > 15000 &&
+          !(await orchestrator()).isRunning()) {
+        console.log("[match] Dolphin is gone and nobody noticed - settling up");
+        await finishMatch();
+      }
+
       // Only look at their games once somebody is waiting for the setup.
       if (matchContext?.viaQueue) {
         if (await opponentIsGone()) await opponentLeft();
