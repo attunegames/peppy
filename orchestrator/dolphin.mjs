@@ -522,6 +522,7 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
   const log = path.join(SANDBOX, LOG_REL);
   const started = Date.now();
   let revealed = false;
+  let toldDisconnected = false;
   // Where the log already ended, so a "Connection success!" from an earlier
   // match can never be mistaken for this one.
   let baseline = 0;
@@ -576,10 +577,12 @@ export function hideUntilConnected(pid, onState, { revealAfterMs = 90000 } = {})
       // Watch for the netplay session ending. Quitting out in game leaves
       // Dolphin open, so the process is no help: Peppy would never know the
       // match was over and the player would sit in the queue as if playing.
-      const text = readLogSince();
-      if (/Disconnecting peer|connection failed|Disconnected from/i.test(text)) {
-        clearInterval(watchTimer);
-        watchTimer = null;
+      // Say it once, but keep watching: the process still has to be seen
+      // exiting, and killing this timer here meant a later close went
+      // completely unnoticed.
+      if (!toldDisconnected &&
+          /Disconnecting peer|connection failed|Disconnected from/i.test(readLogSince())) {
+        toldDisconnected = true;
         onState?.("disconnected");
       }
       return;

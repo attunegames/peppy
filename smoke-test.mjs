@@ -256,6 +256,11 @@ ok("colour 0 is the default", ini3.includes("3BE00000"));
   const src = fs.readFileSync("./orchestrator/dolphin.mjs", "utf8");
   ok("the log is watched for the connection ending", /Disconnecting peer/.test(src));
   ok("...only from the moment the match was revealed",
-    src.indexOf("baseline = fs.statSync(log).size") < src.indexOf("if (/Disconnecting peer"));
-  ok("shaders come along to the sandbox", !/\/XD", "Cache"|"Cache", "Dump"/.test(src));
+    src.indexOf("baseline = fs.statSync(log).size") <
+      src.indexOf("/Disconnecting peer|connection failed"));
+  ok("shaders come along to the sandbox", !/"Cache", "Dump"/.test(src));
+  // However the game goes away, the queue must not be left thinking this
+  // player is still in a match.
+  ok("a match that ends unseen is still settled up",
+    fs.readFileSync("./main.js", "utf8").includes("Dolphin is gone and nobody noticed"));
 }
